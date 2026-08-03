@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%; /* Very light blue/gray background */
+    --foreground: 208 92% 9%; /* #02182B (Main Text) */
+    --card: 0 0% 100%;
+    --card-foreground: 208 92% 9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 208 92% 9%;
+    --primary: 203 100% 49%; /* #0197F6 (Accent) */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 192 41% 45%; /* #448FA3 (Secondary Text) */
+    --secondary-foreground: 0 0% 100%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 192 41% 45%;
+    --accent: 191 63% 63%; /* #68C5DB (Success/Highlight) */
+    --accent-foreground: 208 92% 9%;
+    --destructive: 352 70% 50%; /* #D7263D (Alerts) */
+    --destructive-foreground: 0 0% 100%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 203 100% 49%;
+    --radius: 1rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-body antialiased;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.container {
+  @apply max-w-5xl px-4 mx-auto;
+}
+
+.glass-card {
+  @apply bg-white border border-slate-200 shadow-sm;
+}
+
+.premium-shadow {
+  box-shadow: 0 4px 20px -2px rgba(2, 24, 43, 0.08);
+}
+
+.page-transition {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-200 rounded-full;
+}
