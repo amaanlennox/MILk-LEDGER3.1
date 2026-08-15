@@ -37,6 +37,8 @@ export function EditDailyEntriesDialog({ open, onOpenChange, type, id, selectedM
     farmerEntries, 
     addOrUpdateEntry, 
     addOrUpdateFarmerEntry, 
+    getLatestPreviousQuantities,
+    getLatestPreviousFarmerQuantities,
     t 
   } = useAppContext();
   
@@ -72,18 +74,29 @@ export function EditDailyEntriesDialog({ open, onOpenChange, type, id, selectedM
 
   const loadEntryForDate = (date: Date) => {
     const entry = getDayEntry(date);
+    const dateStr = format(date, 'yyyy-MM-dd');
     if (entry) {
-      setCowQuantity(entry.cowQuantity || 0);
-      setBuffaloQuantity(entry.buffaloQuantity || 0);
-      setIsNoMilk((entry.cowQuantity || 0) + (entry.buffaloQuantity || 0) === 0);
+      setCowQuantity(Number(entry.cowQuantity) || 0);
+      setBuffaloQuantity(Number(entry.buffaloQuantity) || 0);
+      setIsNoMilk((Number(entry.cowQuantity) || 0) + (Number(entry.buffaloQuantity) || 0) === 0);
     } else if (entity) {
       if (sessionDefaultsRef.current) {
         setCowQuantity(sessionDefaultsRef.current.cow);
         setBuffaloQuantity(sessionDefaultsRef.current.buffalo);
       } else {
-        const milkTypes = entity.milkTypes || [];
-        setCowQuantity(milkTypes.includes('cow') ? (entity.defaultCowQuantity ?? 0) : 0);
-        setBuffaloQuantity(milkTypes.includes('buffalo') ? (entity.defaultBuffaloQuantity ?? 0) : 0);
+        // AUTO-FILL FROM PREVIOUS
+        const prev = type === 'customer' 
+            ? getLatestPreviousQuantities(entity.id, dateStr)
+            : getLatestPreviousFarmerQuantities(entity.id, dateStr);
+
+        if (prev) {
+            setCowQuantity(prev.cow);
+            setBuffaloQuantity(prev.buffalo);
+        } else {
+            const milkTypes = entity.milkTypes || [];
+            setCowQuantity(milkTypes.includes('cow') ? (entity.defaultCowQuantity ?? 0) : 0);
+            setBuffaloQuantity(milkTypes.includes('buffalo') ? (entity.defaultBuffaloQuantity ?? 0) : 0);
+        }
       }
       setIsNoMilk(false);
     }
@@ -171,7 +184,7 @@ export function EditDailyEntriesDialog({ open, onOpenChange, type, id, selectedM
               <div className="space-y-2 pb-6">
                 {daysInMonth.map(day => {
                   const entry = getDayEntry(day);
-                  const isZero = entry && (entry.cowQuantity + entry.buffaloQuantity === 0);
+                  const isZero = entry && (Number(entry.cowQuantity) + Number(entry.buffaloQuantity) === 0);
 
                   return (
                     <div 
@@ -191,13 +204,13 @@ export function EditDailyEntriesDialog({ open, onOpenChange, type, id, selectedM
                                     {(entity.milkTypes || []).includes('cow') && (
                                         <div className="text-[10px]">
                                             <span className="font-bold text-slate-400 uppercase mr-1">C</span>
-                                            <span className="font-black text-slate-900">{entry.cowQuantity.toFixed(2)}L</span>
+                                            <span className="font-black text-slate-900">{Number(entry.cowQuantity).toFixed(2)}L</span>
                                         </div>
                                     )}
                                     {(entity.milkTypes || []).includes('buffalo') && (
                                         <div className="text-[10px]">
                                             <span className="font-bold text-slate-400 uppercase mr-1">B</span>
-                                            <span className="font-black text-slate-900">{entry.buffaloQuantity.toFixed(2)}L</span>
+                                            <span className="font-black text-slate-900">{Number(entry.buffaloQuantity).toFixed(2)}L</span>
                                         </div>
                                     )}
                                     {isZero && <span className="text-[10px] font-black text-rose-500 uppercase">{t('noMilk')}</span>}
@@ -258,7 +271,7 @@ export function EditDailyEntriesDialog({ open, onOpenChange, type, id, selectedM
               <div className="space-y-4">
                   {!getDayEntry(editDate!) && (
                       <div className="p-2 bg-amber-50 border border-amber-100 rounded-xl text-center">
-                          <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest">{t('noEntryRecorded')} - Creating New</p>
+                          <p className="text-[10px] font-black text-amber-600 uppercase tracking-widest">{t('noEntryRecorded')} - Auto-filled</p>
                       </div>
                   )}
 

@@ -1,5 +1,11 @@
 export type MilkType = "cow" | "buffalo";
 
+export interface RateHistoryEntry {
+  cowRate: number;
+  buffaloRate: number;
+  effectiveMonth: string; // YYYY-MM
+}
+
 export interface Customer {
   id: string;
   name: string;
@@ -8,6 +14,8 @@ export interface Customer {
   buffaloRate: number;
   defaultCowQuantity?: number;
   defaultBuffaloQuantity?: number;
+  order?: number;
+  rateHistory?: RateHistoryEntry[];
 }
 
 export interface MilkEntry {
@@ -28,6 +36,8 @@ export interface Farmer {
   buffaloRate: number;
   defaultCowQuantity?: number;
   defaultBuffaloQuantity?: number;
+  order?: number;
+  rateHistory?: RateHistoryEntry[];
 }
 
 export interface FarmerMilkEntry {
@@ -57,6 +67,7 @@ export interface ProductEntry {
   productType: ProductType;
   quantity: number; // in kg
   price: number; // total price
+  paidAmount: number; // amount paid at time of purchase
 }
 
 export interface LeftoverSale {
@@ -76,6 +87,7 @@ export interface QuickSaleCustomer {
   lastQuantity?: number;
   lastRate?: number;
   lastMilkType?: MilkType;
+  order?: number;
 }
 
 export interface QuickSaleEntry {

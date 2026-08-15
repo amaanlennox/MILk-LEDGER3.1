@@ -3,8 +3,9 @@
 import { useState, useMemo } from "react";
 import { useAppContext } from "@/context/AppContext";
 import { Button } from "@/components/ui/button";
-import { Plus, MoreVertical, Edit, Trash2, Home, Search, X, Tractor } from "lucide-react";
+import { Plus, MoreVertical, Edit, Trash2, Home, Search, X, Tractor, ArrowUpDown } from "lucide-react";
 import { FarmerDialog } from "@/components/FarmerDialog";
+import { ReorderDialog } from "@/components/ReorderDialog";
 import type { Farmer } from "@/lib/types";
 import {
   DropdownMenu,
@@ -30,6 +31,7 @@ import { Badge } from "@/components/ui/badge";
 export default function FarmersPage() {
   const { farmers, deleteFarmer, t, isDataLoaded } = useAppContext();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [reorderOpen, setReorderOpen] = useState(false);
   const [selectedFarmer, setSelectedFarmer] = useState<Farmer | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -44,12 +46,11 @@ export default function FarmersPage() {
     setDialogOpen(true);
   };
 
+  // Strictly follow AppContext orderIndex
   const filteredFarmers = useMemo(() => {
-    return farmers
-      .filter((f) => {
-        return f.name.toLowerCase().includes(searchTerm.toLowerCase());
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
+    return farmers.filter((f) => {
+      return f.name.toLowerCase().includes(searchTerm.toLowerCase());
+    });
   }, [farmers, searchTerm]);
   
   if (!isDataLoaded) {
@@ -82,10 +83,23 @@ export default function FarmersPage() {
             </Badge>
           </div>
         </div>
-        <Button onClick={handleAdd} size="default" className="w-full sm:w-auto font-black rounded-xl bg-secondary hover:bg-secondary/90 shadow-lg shadow-secondary/20">
-          <Plus className="mr-2 h-4 w-4" />
-          {t('addFarmer')}
-        </Button>
+        <div className="flex gap-2 w-full sm:w-auto">
+            <Button 
+                onClick={() => setReorderOpen(true)} 
+                variant="outline" 
+                className="flex-1 sm:flex-none h-10 rounded-xl font-black border-slate-200 px-2 text-[10px] sm:text-xs md:text-sm min-w-0"
+            >
+                <ArrowUpDown className="mr-1.5 h-4 w-4 shrink-0" />
+                <span className="truncate">{t('manageEntryOrder')}</span>
+            </Button>
+            <Button 
+                onClick={handleAdd} 
+                className="flex-1 sm:flex-none h-10 font-black rounded-xl bg-secondary hover:bg-secondary/90 shadow-lg shadow-secondary/20 text-white px-2 text-[10px] sm:text-xs md:text-sm min-w-0"
+            >
+                <Plus className="mr-1.5 h-4 w-4 shrink-0" />
+                <span className="truncate">{t('addFarmer')}</span>
+            </Button>
+        </div>
       </div>
 
       <div className="relative mb-4">
@@ -116,7 +130,10 @@ export default function FarmersPage() {
                     <Tractor className="h-5 w-5 text-secondary" />
                 </div>
                 <div className="min-w-0">
-                  <p className="font-black text-base text-slate-900 truncate leading-tight">{farmer.name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-black text-base text-slate-900 truncate leading-tight">{farmer.name}</p>
+                    <Badge variant="outline" className="text-[8px] font-black text-slate-300 opacity-60 uppercase border-0 p-0">[{farmer.order ?? 0}]</Badge>
+                  </div>
                   <p className="text-[9px] text-slate-400 uppercase tracking-widest font-black mt-0.5">
                     {(farmer.milkTypes || []).map(t).join(' • ')}
                   </p>
@@ -169,6 +186,12 @@ export default function FarmersPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         farmer={selectedFarmer}
+      />
+
+      <ReorderDialog
+        open={reorderOpen}
+        onOpenChange={setReorderOpen}
+        type="farmer"
       />
 
       <AlertDialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>

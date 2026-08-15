@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 
 export function FarmerReminderCard({ farmer, date }: { farmer: Farmer, date?: Date }) {
-    const { addOrUpdateFarmerEntry, t } = useAppContext();
+    const { addOrUpdateFarmerEntry, getLatestPreviousFarmerQuantities, t } = useAppContext();
     const { toast } = useToast();
     const activeDate = date || new Date();
     const dateString = format(activeDate, 'yyyy-MM-dd');
@@ -22,11 +22,18 @@ export function FarmerReminderCard({ farmer, date }: { farmer: Farmer, date?: Da
     const [isNoMilk, setIsNoMilk] = useState(false);
     
     useEffect(() => {
-        const milkTypes = farmer.milkTypes || [];
-        setCowQuantity(milkTypes.includes('cow') ? (farmer.defaultCowQuantity ?? 0) : 0);
-        setBuffaloQuantity(milkTypes.includes('buffalo') ? (farmer.defaultBuffaloQuantity ?? 0) : 0);
+        // AUTO-FILL FROM PREVIOUS
+        const prev = getLatestPreviousFarmerQuantities(farmer.id, dateString);
+        if (prev) {
+            setCowQuantity(prev.cow);
+            setBuffaloQuantity(prev.buffalo);
+        } else {
+            const milkTypes = farmer.milkTypes || [];
+            setCowQuantity(milkTypes.includes('cow') ? (farmer.defaultCowQuantity ?? 0) : 0);
+            setBuffaloQuantity(milkTypes.includes('buffalo') ? (farmer.defaultBuffaloQuantity ?? 0) : 0);
+        }
         setIsNoMilk(false);
-    }, [farmer, dateString]);
+    }, [farmer, dateString, getLatestPreviousFarmerQuantities]);
 
     const handleSave = () => {
         addOrUpdateFarmerEntry({

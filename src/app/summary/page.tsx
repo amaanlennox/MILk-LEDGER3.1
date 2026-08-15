@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useAppContext } from "@/context/AppContext";
@@ -24,16 +25,19 @@ export default function SummaryListPage() {
   } = useAppContext();
   const [searchTerm, setSearchTerm] = useState("");
 
+  // Strictly follow AppContext orderIndex. No name-based sorting.
   const filteredCustomers = useMemo(() => 
     customers.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase())),
     [customers, searchTerm]
   );
 
+  // Strictly follow AppContext orderIndex. No name-based sorting.
   const filteredFarmers = useMemo(() => 
     farmers.filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase())),
     [farmers, searchTerm]
   );
 
+  // Strictly follow AppContext orderIndex. No name-based sorting.
   const filteredQuickSale = useMemo(() => 
     quickSaleCustomers.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase())),
     [quickSaleCustomers, searchTerm]
@@ -41,8 +45,8 @@ export default function SummaryListPage() {
 
   // Helper to get balance for Quick Sale display
   const getQuickSaleBalance = (customerId: string) => {
-    const sales = quickSaleEntries.filter(e => e.customerId === customerId).reduce((sum, e) => sum + e.amount, 0);
-    const payments = quickSalePayments.filter(p => p.customerId === customerId).reduce((sum, p) => sum + p.amount, 0);
+    const sales = quickSaleEntries.filter(e => e.customerId === customerId).reduce((sum, e) => sum + Number(e.amount), 0);
+    const payments = quickSalePayments.filter(p => p.customerId === customerId).reduce((sum, p) => sum + Number(p.amount), 0);
     return sales - payments;
   };
 
@@ -62,7 +66,7 @@ export default function SummaryListPage() {
   return (
     <div className="container py-4 max-w-3xl page-transition">
       <div className="mb-6 px-1">
-        <Link href="/" className="text-[9px] font-black text-secondary hover:text-primary flex items-center gap-1 mb-1 uppercase tracking-widest transition-colors">
+        <Link href="/" className="text-[9px] font-black text-secondary hover:text-primary flex items-center gap-1.5 mb-1 uppercase tracking-widest transition-colors">
             <Home className="w-3 h-3"/> {t('backToHome')}
         </Link>
         <h1 className="text-3xl font-black text-slate-900 tracking-tight">{t('monthlySummary')}</h1>

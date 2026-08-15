@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, Suspense, useMemo } from 'react';
 import { useAppContext } from '@/context/AppContext';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
@@ -21,7 +21,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { FarmerPaymentDialog } from '@/components/FarmerPaymentDialog';
 
 function CustomerEntryCard({ customer, date }: { customer: Customer, date: Date }) {
-    const { getEntry, addOrUpdateEntry, t } = useAppContext();
+    const { getEntry, addOrUpdateEntry, getLatestPreviousQuantities, getEffectiveRate, t } = useAppContext();
     const { toast } = useToast();
     const dateString = format(date, 'yyyy-MM-dd');
 
@@ -31,27 +31,37 @@ function CustomerEntryCard({ customer, date }: { customer: Customer, date: Date 
     
     const existingEntry = getEntry(customer.id, dateString);
 
+    const effectiveRate = useMemo(() => getEffectiveRate(customer.rateHistory, dateString), [customer, dateString, getEffectiveRate]);
+
     useEffect(() => {
         const entry = getEntry(customer.id, dateString);
         if (entry) {
-            setCowQuantity(entry.cowQuantity ?? 0);
-            setBuffaloQuantity(entry.buffaloQuantity ?? 0);
+            setCowQuantity(Number(entry.cowQuantity) || 0);
+            setBuffaloQuantity(Number(entry.buffaloQuantity) || 0);
+            setIsNoMilk((Number(entry.cowQuantity) || 0) + (Number(entry.buffaloQuantity) || 0) === 0);
         } else {
-            const milkTypes = customer.milkTypes || [];
-            setCowQuantity(milkTypes.includes('cow') ? (customer.defaultCowQuantity ?? 0) : 0);
-            setBuffaloQuantity(milkTypes.includes('buffalo') ? (customer.defaultBuffaloQuantity ?? 0) : 0);
+            // AUTO-FILL FROM PREVIOUS
+            const prev = getLatestPreviousQuantities(customer.id, dateString);
+            if (prev) {
+                setCowQuantity(prev.cow);
+                setBuffaloQuantity(prev.buffalo);
+            } else {
+                const milkTypes = customer.milkTypes || [];
+                setCowQuantity(milkTypes.includes('cow') ? (customer.defaultCowQuantity ?? 0) : 0);
+                setBuffaloQuantity(milkTypes.includes('buffalo') ? (customer.defaultBuffaloQuantity ?? 0) : 0);
+            }
             setIsNoMilk(false);
         }
-    }, [dateString, customer, getEntry]);
+    }, [dateString, customer, getEntry, getLatestPreviousQuantities]);
 
     const handleSave = () => {
         addOrUpdateEntry({
             customerId: customer.id,
             date: dateString,
             cowQuantity: isNoMilk ? 0 : cowQuantity,
-            cowRate: customer.cowRate || 0,
+            cowRate: effectiveRate?.cowRate ?? customer.cowRate ?? 0,
             buffaloQuantity: isNoMilk ? 0 : buffaloQuantity,
-            buffaloRate: customer.buffaloRate || 0,
+            buffaloRate: effectiveRate?.buffaloRate ?? customer.buffaloRate ?? 0,
         });
         toast({
             title: t('save'),
@@ -59,7 +69,9 @@ function CustomerEntryCard({ customer, date }: { customer: Customer, date: Date 
         });
     };
 
-    const total = (isNoMilk ? 0 : (cowQuantity * customer.cowRate + buffaloQuantity * customer.buffaloRate));
+    const cowRate = effectiveRate?.cowRate ?? customer.cowRate ?? 0;
+    const buffRate = effectiveRate?.buffaloRate ?? customer.buffaloRate ?? 0;
+    const total = (isNoMilk ? 0 : (cowQuantity * cowRate + buffaloQuantity * buffRate));
 
     return (
         <Card className="overflow-hidden glass-card h-full flex flex-col rounded-xl transition-all border-slate-100 hover:border-primary/20">
@@ -117,7 +129,7 @@ function CustomerEntryCard({ customer, date }: { customer: Customer, date: Date 
 }
 
 function FarmerPurchaseCard({ farmer, date }: { farmer: Farmer, date: Date }) {
-    const { getFarmerEntry, addOrUpdateFarmerEntry, t } = useAppContext();
+    const { getFarmerEntry, addOrUpdateFarmerEntry, getLatestPreviousFarmerQuantities, getEffectiveRate, t } = useAppContext();
     const { toast } = useToast();
     const dateString = format(date, 'yyyy-MM-dd');
 
@@ -127,28 +139,37 @@ function FarmerPurchaseCard({ farmer, date }: { farmer: Farmer, date: Date }) {
     const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
     
     const existingEntry = getFarmerEntry(farmer.id, dateString);
+    const effectiveRate = useMemo(() => getEffectiveRate(farmer.rateHistory, dateString), [farmer, dateString, getEffectiveRate]);
 
     useEffect(() => {
         const entry = getFarmerEntry(farmer.id, dateString);
         if (entry) {
-            setCowQuantity(entry.cowQuantity ?? 0);
-            setBuffaloQuantity(entry.buffaloQuantity ?? 0);
+            setCowQuantity(Number(entry.cowQuantity) || 0);
+            setBuffaloQuantity(Number(entry.buffaloQuantity) || 0);
+            setIsNoMilk((Number(entry.cowQuantity) || 0) + (Number(entry.buffaloQuantity) || 0) === 0);
         } else {
-            const milkTypes = farmer.milkTypes || [];
-            setCowQuantity(milkTypes.includes('cow') ? (farmer.defaultCowQuantity ?? 0) : 0);
-            setBuffaloQuantity(milkTypes.includes('buffalo') ? (farmer.defaultBuffaloQuantity ?? 0) : 0);
+            // AUTO-FILL FROM PREVIOUS
+            const prev = getLatestPreviousFarmerQuantities(farmer.id, dateString);
+            if (prev) {
+                setCowQuantity(prev.cow);
+                setBuffaloQuantity(prev.buffalo);
+            } else {
+                const milkTypes = farmer.milkTypes || [];
+                setCowQuantity(milkTypes.includes('cow') ? (farmer.defaultCowQuantity ?? 0) : 0);
+                setBuffaloQuantity(milkTypes.includes('buffalo') ? (farmer.defaultBuffaloQuantity ?? 0) : 0);
+            }
             setIsNoMilk(false);
         }
-    }, [dateString, farmer, getFarmerEntry]);
+    }, [dateString, farmer, getFarmerEntry, getLatestPreviousFarmerQuantities]);
 
     const handleSave = () => {
         addOrUpdateFarmerEntry({
             farmerId: farmer.id,
             date: dateString,
             cowQuantity: isNoMilk ? 0 : cowQuantity,
-            cowRate: farmer.cowRate || 0,
+            cowRate: effectiveRate?.cowRate ?? farmer.cowRate ?? 0,
             buffaloQuantity: isNoMilk ? 0 : buffaloQuantity,
-            buffaloRate: farmer.buffaloRate || 0,
+            buffaloRate: effectiveRate?.buffaloRate ?? farmer.buffaloRate ?? 0,
         });
         toast({
             title: t('save'),
@@ -156,7 +177,9 @@ function FarmerPurchaseCard({ farmer, date }: { farmer: Farmer, date: Date }) {
         });
     };
 
-    const total = (isNoMilk ? 0 : (cowQuantity * farmer.cowRate + buffaloQuantity * farmer.buffaloRate));
+    const cowRate = effectiveRate?.cowRate ?? farmer.cowRate ?? 0;
+    const buffRate = effectiveRate?.buffaloRate ?? farmer.buffaloRate ?? 0;
+    const total = (isNoMilk ? 0 : (cowQuantity * cowRate + buffaloQuantity * buffRate));
 
     return (
         <>

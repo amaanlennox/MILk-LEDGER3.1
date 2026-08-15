@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect } from "react";
@@ -21,7 +20,7 @@ export default function DailyEntryPage() {
   const params = useParams();
   const id = params.id as string;
   const router = useRouter();
-  const { getCustomerById, addOrUpdateEntry, t } = useAppContext();
+  const { getCustomerById, addOrUpdateEntry, getLatestPreviousQuantities, t } = useAppContext();
   const { toast } = useToast();
   
   const customer = getCustomerById(id);
@@ -50,12 +49,24 @@ export default function DailyEntryPage() {
 
   useEffect(() => {
     if (customer) {
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        const prev = getLatestPreviousQuantities(customer.id, todayStr);
+        
+        const isCow = customer.milkTypes.includes('cow');
+        
+        let defaultQty = 1;
+        if (prev) {
+            defaultQty = isCow ? prev.cow : prev.buffalo;
+        } else {
+            defaultQty = (isCow ? customer.defaultCowQuantity : customer.defaultBuffaloQuantity) || 1;
+        }
+
         form.reset({
-            quantity: customer.defaultCowQuantity || customer.defaultBuffaloQuantity || 1,
-            rate: customer.cowRate || customer.buffaloRate || 0,
+            quantity: defaultQty,
+            rate: (isCow ? customer.cowRate : customer.buffaloRate) || 0,
         });
     }
-  }, [customer, form]);
+  }, [customer, form, getLatestPreviousQuantities]);
 
   if (!customer) {
     return (

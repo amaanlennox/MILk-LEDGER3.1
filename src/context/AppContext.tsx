@@ -1,10 +1,11 @@
+
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
-import { Customer, MilkEntry, Farmer, FarmerMilkEntry, FarmerPayment, ProductEntry, LeftoverSale, MilkType, QuickSaleCustomer, QuickSaleEntry, QuickSalePayment } from '@/lib/types';
+import { Customer, MilkEntry, Farmer, FarmerMilkEntry, FarmerPayment, ProductEntry, LeftoverSale, MilkType, QuickSaleCustomer, QuickSaleEntry, QuickSalePayment, RateHistoryEntry } from '@/lib/types';
 import { translations, Language } from '@/lib/i18n';
 import * as db from '@/lib/db';
-import { format, subDays } from 'date-fns';
+import { format, subDays, startOfMonth } from 'date-fns';
 
 interface AppContextType {
   customers: Customer[];
@@ -20,12 +21,14 @@ interface AppContextType {
   addCustomer: (customer: Omit<Customer, 'id'>) => void;
   updateCustomer: (customer: Customer) => void;
   deleteCustomer: (id: string) => void;
+  updateCustomerOrder: (orderedIds: string[]) => void;
   addOrUpdateEntry: (entry: Omit<MilkEntry, 'id'>) => void;
   getEntry: (customerId: string, date: string) => MilkEntry | undefined;
   getCustomerById: (id: string) => Customer | undefined;
   addFarmer: (farmer: Omit<Farmer, 'id'>) => void;
   updateFarmer: (farmer: Farmer) => void;
   deleteFarmer: (id: string) => void;
+  updateFarmerOrder: (orderedIds: string[]) => void;
   addOrUpdateFarmerEntry: (entry: Omit<FarmerMilkEntry, 'id'>) => void;
   getFarmerEntry: (farmerId: string, date: string) => FarmerMilkEntry | undefined;
   getFarmerById: (id: string) => Farmer | undefined;
@@ -40,6 +43,9 @@ interface AppContextType {
   addQuickSalePayment: (payment: Omit<QuickSalePayment, 'id'>) => void;
   deleteQuickSalePayment: (id: string) => void;
   getQuickSaleCustomerById: (id: string) => QuickSaleCustomer | undefined;
+  getLatestPreviousQuantities: (customerId: string, date: string) => { cow: number, buffalo: number } | null;
+  getLatestPreviousFarmerQuantities: (farmerId: string, date: string) => { cow: number, buffalo: number } | null;
+  getEffectiveRate: (rateHistory: RateHistoryEntry[] | undefined, dateStr: string) => RateHistoryEntry | null;
   copyYesterdayEntries: (date: Date) => void;
   language: Language;
   setLanguage: (lang: Language) => void;
@@ -114,6 +120,25 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [inAppRemindersEnabled, setInAppRemindersEnabledState] = useState(false);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
 
+  // CRITICAL: Strict ordering by "order" field ONLY. No name-based fallback.
+  const sortEntities = useCallback(<T extends { order?: number }>(entities: T[]): T[] => {
+    return [...entities].sort((a, b) => {
+      const orderA = Number(a.order ?? 999999);
+      const orderB = Number(b.order ?? 999999);
+      return orderA - orderB;
+    });
+  }, []);
+
+  const getEffectiveRate = useCallback((rateHistory: RateHistoryEntry[] | undefined, dateStr: string): RateHistoryEntry | null => {
+    if (!rateHistory || rateHistory.length === 0) return null;
+    const targetMonth = dateStr.substring(0, 7); // YYYY-MM
+    // Sort descending to find the closest record that is not in the future relative to target
+    const sorted = [...rateHistory].sort((a, b) => b.effectiveMonth.localeCompare(a.effectiveMonth));
+    const match = sorted.find(r => r.effectiveMonth <= targetMonth);
+    // If no match found (e.g., target is older than earliest record), use the oldest available record
+    return match || sorted[sorted.length - 1];
+  }, []);
+
   useEffect(() => {
     async function loadData() {
       if (typeof window !== 'undefined') {
@@ -148,25 +173,87 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
         ]);
 
         let finalCustomers = storedCustomers || [];
+        let finalFarmers = storedFarmers || [];
+        let finalQuickSale = storedQuickSaleCustomers || [];
 
+        // Rate History Migration & Number Coercion
+        // Baseline for existing rates set to early 2024 to cover historical entries
+        const baselineMonth = "2024-01"; 
+        
+        const migrateRates = (entities: any[]) => {
+          return entities.map(e => {
+            const hasRateHistory = e.rateHistory && e.rateHistory.length > 0;
+            if (!hasRateHistory) {
+              return {
+                ...e,
+                rateHistory: [{
+                  cowRate: Number(e.cowRate || 0),
+                  buffaloRate: Number(e.buffaloRate || 0),
+                  effectiveMonth: baselineMonth
+                }]
+              };
+            }
+            // Ensure existing rate history entries are numbers
+            return {
+              ...e,
+              rateHistory: e.rateHistory.map((rh: any) => ({
+                ...rh,
+                cowRate: Number(rh.cowRate || 0),
+                buffaloRate: Number(rh.buffaloRate || 0)
+              }))
+            };
+          });
+        };
+
+        finalCustomers = migrateRates(finalCustomers);
+        finalFarmers = migrateRates(finalFarmers);
+
+        // SEEDING
         if (!isSeeded && finalCustomers.length === 0) {
-          const seededCustomers: Customer[] = INITIAL_CUSTOMERS_DATA.map(c => ({
+          const seededCustomers: Customer[] = INITIAL_CUSTOMERS_DATA.map((c, idx) => ({
             ...c,
             id: generateId(),
-            milkTypes: c.milkTypes as MilkType[]
+            milkTypes: c.milkTypes as MilkType[],
+            order: idx,
+            rateHistory: [{
+              cowRate: Number(c.cowRate || 0),
+              buffaloRate: Number(c.buffaloRate || 0),
+              effectiveMonth: baselineMonth
+            }]
           }));
           finalCustomers = seededCustomers;
           await db.set('isSeeded', true);
         }
 
-        setCustomers(finalCustomers);
+        // MIGRATION: Ensure order
+        let migrated = false;
+        const ensureOrder = (list: any[]) => {
+          if (list.length > 0 && list.some(item => item.order === undefined)) {
+            migrated = true;
+            return list.map((item, idx) => ({ ...item, order: item.order ?? idx }));
+          }
+          return list;
+        };
+
+        const migratedCustomers = ensureOrder(finalCustomers);
+        const migratedFarmers = ensureOrder(finalFarmers);
+        const migratedQuickSale = ensureOrder(finalQuickSale);
+
+        setCustomers(sortEntities(migratedCustomers));
+        setFarmers(sortEntities(migratedFarmers));
+        setQuickSaleCustomers(sortEntities(migratedQuickSale));
+        
+        if (migrated) {
+            db.set('customers', migratedCustomers);
+            db.set('farmers', migratedFarmers);
+            db.set('quickSaleCustomers', migratedQuickSale);
+        }
+
         setEntries(storedEntries || []);
-        setFarmers(storedFarmers || []);
         setFarmerEntries(storedFarmerEntries || []);
         setFarmerPayments(storedFarmerPayments || []);
         setProductEntries(storedProductEntries || []);
         setLeftoverSales(storedLeftoverSales || []);
-        setQuickSaleCustomers(storedQuickSaleCustomers || []);
         setQuickSaleEntries(storedQuickSaleEntries || []);
         setQuickSalePayments(storedQuickSalePayments || []);
         setLanguageState(storedLanguage || 'en');
@@ -175,30 +262,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       }
     }
     loadData();
-  }, []);
-
-  // Global body-lock safety cleanup
-  useEffect(() => {
-    const handleGlobalCleanup = () => {
-      // Small delay to let animations finish
-      setTimeout(() => {
-        const isDialogOpen = !!document.querySelector('[role="dialog"], [data-radix-menu-content], .radix-overlay');
-        if (!isDialogOpen) {
-          document.body.style.pointerEvents = "";
-          document.body.style.overflow = "";
-          document.documentElement.style.pointerEvents = "";
-          document.documentElement.style.overflow = "";
-        }
-      }, 400);
-    };
-
-    window.addEventListener('click', handleGlobalCleanup);
-    window.addEventListener('touchend', handleGlobalCleanup);
-    return () => {
-      window.removeEventListener('click', handleGlobalCleanup);
-      window.removeEventListener('touchend', handleGlobalCleanup);
-    };
-  }, []);
+  }, [sortEntities]);
 
   useEffect(() => { if (isDataLoaded) db.set('customers', customers); }, [customers, isDataLoaded]);
   useEffect(() => { if (isDataLoaded) db.set('entries', entries); }, [entries, isDataLoaded]);
@@ -213,20 +277,41 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => { if (isDataLoaded) db.set('language', language); }, [language, isDataLoaded]);
   useEffect(() => { if (isDataLoaded) db.set('inAppRemindersEnabled', inAppRemindersEnabled); }, [inAppRemindersEnabled, isDataLoaded]);
 
-  const addCustomer = useCallback((customer: Omit<Customer, 'id'>) => {
-    const newCustomer = { ...customer, id: generateId() };
-    setCustomers(prev => [...prev, newCustomer]);
-  }, []);
+  const addCustomer = useCallback((customerData: Omit<Customer, 'id'>) => {
+    const baselineMonth = "2024-01";
+    const maxOrder = customers.reduce((max, c) => Math.max(max, Number(c.order ?? 0)), -1);
+    const newCustomer = { 
+      ...customerData, 
+      id: generateId(), 
+      order: maxOrder + 1,
+      rateHistory: [{
+        cowRate: Number(customerData.cowRate || 0),
+        buffaloRate: Number(customerData.buffaloRate || 0),
+        effectiveMonth: baselineMonth
+      }]
+    };
+    setCustomers(prev => sortEntities([...prev, newCustomer]));
+  }, [customers, sortEntities]);
 
   const updateCustomer = useCallback((updatedCustomer: Customer) => {
-    setCustomers(prev => prev.map(c => c.id === updatedCustomer.id ? updatedCustomer : c));
-  }, []);
+    setCustomers(prev => sortEntities(prev.map(c => c.id === updatedCustomer.id ? updatedCustomer : c)));
+  }, [sortEntities]);
 
   const deleteCustomer = useCallback((id: string) => {
     setCustomers(prev => prev.filter(c => c.id !== id));
     setEntries(prev => prev.filter(e => e.customerId !== id));
     setProductEntries(prev => prev.filter(e => e.customerId !== id));
   }, []);
+
+  const updateCustomerOrder = useCallback((orderedIds: string[]) => {
+    setCustomers(prev => {
+      const updated = prev.map(c => {
+        const newOrder = orderedIds.indexOf(c.id);
+        return { ...c, order: newOrder !== -1 ? newOrder : c.order };
+      });
+      return sortEntities(updated);
+    });
+  }, [sortEntities]);
 
   const addOrUpdateEntry = useCallback((entryData: Omit<MilkEntry, 'id'>) => {
     setEntries(prevEntries => {
@@ -250,20 +335,41 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     return customers.find(c => c.id === id);
   }, [customers]);
 
-  const addFarmer = useCallback((farmer: Omit<Farmer, 'id'>) => {
-    const newFarmer = { ...farmer, id: generateId() };
-    setFarmers(prev => [...prev, newFarmer]);
-  }, []);
+  const addFarmer = useCallback((farmerData: Omit<Farmer, 'id'>) => {
+    const baselineMonth = "2024-01";
+    const maxOrder = farmers.reduce((max, f) => Math.max(max, Number(f.order ?? 0)), -1);
+    const newFarmer = { 
+      ...farmerData, 
+      id: generateId(), 
+      order: maxOrder + 1,
+      rateHistory: [{
+        cowRate: Number(farmerData.cowRate || 0),
+        buffaloRate: Number(farmerData.buffaloRate || 0),
+        effectiveMonth: baselineMonth
+      }]
+    };
+    setFarmers(prev => sortEntities([...prev, newFarmer]));
+  }, [farmers, sortEntities]);
 
   const updateFarmer = useCallback((updatedFarmer: Farmer) => {
-    setFarmers(prev => prev.map(f => f.id === updatedFarmer.id ? updatedFarmer : f));
-  }, []);
+    setFarmers(prev => sortEntities(prev.map(f => f.id === updatedFarmer.id ? updatedFarmer : f)));
+  }, [sortEntities]);
 
   const deleteFarmer = useCallback((id: string) => {
     setFarmers(prev => prev.filter(f => f.id !== id));
     setFarmerEntries(prev => prev.filter(e => e.farmerId !== id));
     setFarmerPayments(prev => prev.filter(p => p.farmerId !== id));
   }, []);
+
+  const updateFarmerOrder = useCallback((orderedIds: string[]) => {
+    setFarmers(prev => {
+      const updated = prev.map(f => {
+        const newOrder = orderedIds.indexOf(f.id);
+        return { ...f, order: newOrder !== -1 ? newOrder : f.order };
+      });
+      return sortEntities(updated);
+    });
+  }, [sortEntities]);
 
   const addOrUpdateFarmerEntry = useCallback((entryData: Omit<FarmerMilkEntry, 'id'>) => {
     setFarmerEntries(prevEntries => {
@@ -313,18 +419,16 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setLeftoverSales(prev => [...prev, newSale]);
   }, []);
 
-  // Quick Sale Methods
   const addQuickSaleCustomer = useCallback((customerData: Omit<QuickSaleCustomer, 'id'>) => {
-    const newCustomer = { ...customerData, id: generateId() };
-    setQuickSaleCustomers(prev => [...prev, newCustomer]);
+    const maxOrder = quickSaleCustomers.reduce((max, c) => Math.max(max, Number(c.order ?? 0)), -1);
+    const newCustomer = { ...customerData, id: generateId(), order: maxOrder + 1 };
+    setQuickSaleCustomers(prev => sortEntities([...prev, newCustomer]));
     return newCustomer;
-  }, []);
+  }, [quickSaleCustomers, sortEntities]);
 
   const addQuickSaleEntry = useCallback((entryData: Omit<QuickSaleEntry, 'id'>) => {
     const newEntry = { ...entryData, id: generateId() };
     setQuickSaleEntries(prev => [...prev, newEntry]);
-    
-    // Update customer last values
     setQuickSaleCustomers(prev => prev.map(c => 
       c.id === entryData.customerId 
         ? { ...c, lastQuantity: entryData.quantity, lastRate: entryData.rate, lastMilkType: entryData.milkType } 
@@ -344,6 +448,34 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const getQuickSaleCustomerById = useCallback((id: string) => {
     return quickSaleCustomers.find(c => c.id === id);
   }, [quickSaleCustomers]);
+
+  const getLatestPreviousQuantities = useCallback((customerId: string, date: string) => {
+    const previousEntries = entries
+      .filter(e => e.customerId === customerId && e.date < date)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    
+    if (previousEntries.length > 0) {
+      return {
+        cow: Number(previousEntries[0].cowQuantity) || 0,
+        buffalo: Number(previousEntries[0].buffaloQuantity) || 0
+      };
+    }
+    return null;
+  }, [entries]);
+
+  const getLatestPreviousFarmerQuantities = useCallback((farmerId: string, date: string) => {
+    const previousEntries = farmerEntries
+      .filter(e => e.farmerId === farmerId && e.date < date)
+      .sort((a, b) => b.date.localeCompare(a.date));
+    
+    if (previousEntries.length > 0) {
+      return {
+        cow: Number(previousEntries[0].cowQuantity) || 0,
+        buffalo: Number(previousEntries[0].buffaloQuantity) || 0
+      };
+    }
+    return null;
+  }, [farmerEntries]);
 
   const copyYesterdayEntries = useCallback((targetDate: Date) => {
     const yesterdayStr = format(subDays(targetDate, 1), 'yyyy-MM-dd');
@@ -378,14 +510,14 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const restoreBackup = useCallback((backupData: any): boolean => {
     try {
       if (backupData && Array.isArray(backupData.customers)) {
-        setCustomers(backupData.customers || []);
+        setCustomers(sortEntities(backupData.customers || []));
         setEntries(backupData.entries || []);
-        setFarmers(backupData.farmers || []);
+        setFarmers(sortEntities(backupData.farmers || []));
         setFarmerEntries(backupData.farmerEntries || []);
         setFarmerPayments(backupData.farmerPayments || []);
         setProductEntries(backupData.productEntries || []);
         setLeftoverSales(backupData.leftoverSales || []);
-        setQuickSaleCustomers(backupData.quickSaleCustomers || []);
+        setQuickSaleCustomers(sortEntities(backupData.quickSaleCustomers || []));
         setQuickSaleEntries(backupData.quickSaleEntries || []);
         setQuickSalePayments(backupData.quickSalePayments || []);
         setLanguageState(backupData.language || 'en');
@@ -394,7 +526,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       }
       return false;
     } catch (e) { return false; }
-  }, []);
+  }, [sortEntities]);
 
   const resetAllData = useCallback(async () => {
     setCustomers([]); setEntries([]); setFarmers([]); setFarmerEntries([]); setFarmerPayments([]);
@@ -405,7 +537,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   return (
-    <AppContext.Provider value={{ customers, entries, farmers, farmerEntries, farmerPayments, productEntries, leftoverSales, quickSaleCustomers, quickSaleEntries, quickSalePayments, addCustomer, updateCustomer, deleteCustomer, addOrUpdateEntry, getEntry, getCustomerById, addFarmer, updateFarmer, deleteFarmer, addOrUpdateFarmerEntry, getFarmerEntry, getFarmerById, addFarmerPayment, updateFarmerPayment, deleteFarmerPayment, addOrUpdateProductEntry, deleteProductEntry, addLeftoverSale, addQuickSaleCustomer, addQuickSaleEntry, addQuickSalePayment, deleteQuickSalePayment, getQuickSaleCustomerById, copyYesterdayEntries, language, setLanguage, t, exportBackup, restoreBackup, inAppRemindersEnabled, setInAppRemindersEnabled, resetAllData, isDataLoaded }}>
+    <AppContext.Provider value={{ customers, entries, farmers, farmerEntries, farmerPayments, productEntries, leftoverSales, quickSaleCustomers, quickSaleEntries, quickSalePayments, addCustomer, updateCustomer, deleteCustomer, updateCustomerOrder, addOrUpdateEntry, getEntry, getCustomerById, addFarmer, updateFarmer, deleteFarmer, updateFarmerOrder, addOrUpdateFarmerEntry, getFarmerEntry, getFarmerById, addFarmerPayment, updateFarmerPayment, deleteFarmerPayment, addOrUpdateProductEntry, deleteProductEntry, addLeftoverSale, addQuickSaleCustomer, addQuickSaleEntry, addQuickSalePayment, deleteQuickSalePayment, getQuickSaleCustomerById, getLatestPreviousQuantities, getLatestPreviousFarmerQuantities, getEffectiveRate, copyYesterdayEntries, language, setLanguage, t, exportBackup, restoreBackup, inAppRemindersEnabled, setInAppRemindersEnabled, resetAllData, isDataLoaded }}>
       {children}
     </AppContext.Provider>
   );

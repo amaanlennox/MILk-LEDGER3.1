@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useMemo, useState } from "react";
@@ -5,7 +6,7 @@ import { useParams } from "next/navigation";
 import { useAppContext } from "@/context/AppContext";
 import { Card } from "@/components/ui/card";
 import Link from "next/link";
-import { ChevronLeft, Share2, Eye, Milk, Download, Calendar as CalIcon, Edit } from "lucide-react";
+import { ChevronLeft, Share2, Eye, Milk, Download, Calendar as CalIcon, Edit, CreditCard, TrendingUp, FileText, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { format, getMonth, getYear, setMonth, setYear, startOfMonth, endOfMonth, eachDayOfInterval } from "date-fns";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -14,30 +15,37 @@ import autoTable from 'jspdf-autotable';
 import { ProductType } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { EditDailyEntriesDialog } from "@/components/EditDailyEntriesDialog";
+import { RateChangeDialog } from "@/components/RateChangeDialog";
+import { cn } from "@/lib/utils";
 
 export default function SummaryPage() {
     const params = useParams();
     const id = params.id as string;
-    const { getCustomerById, entries, productEntries, t, isDataLoaded } = useAppContext();
+    const { getCustomerById, entries, productEntries, getEffectiveRate, t, isDataLoaded } = useAppContext();
     const { toast } = useToast();
 
     const customer = getCustomerById(id);
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [editEntriesOpen, setEditEntriesOpen] = useState(false);
+    const [rateDialogOpen, setRateDialogOpen] = useState(false);
+    const [billMode, setBillMode] = useState<'a4' | 'thermal'>('a4');
 
     const safeT = (key: string) => {
         const val = t(key as any);
         return val || key;
     };
 
-    const { monthlyTimeline, totals, calendarDays } = useMemo(() => {
-        if (!customer) return { monthlyTimeline: [], totals: { cowQuantity: 0, buffaloQuantity: 0, milkTotalAmount: 0, cowTotalAmount: 0, buffaloTotalAmount: 0, productsTotalAmount: 0, grandTotal: 0, paneerQuantity: 0, paneerTotalAmount: 0, gheeQuantity: 0, gheeTotalAmount: 0, prevDue: 0, prevAdvance: 0 }, calendarDays: [] };
+    const { monthlyTimeline, totals, calendarDays, effectiveRate } = useMemo(() => {
+        if (!customer) return { monthlyTimeline: [], totals: { cowQuantity: 0, buffaloQuantity: 0, milkTotalAmount: 0, cowTotalAmount: 0, buffaloTotalAmount: 0, productsTotalAmount: 0, grandTotal: 0, paneerQuantity: 0, paneerTotalAmount: 0, gheeQuantity: 0, gheeTotalAmount: 0, productsDueAmount: 0 }, calendarDays: [], effectiveRate: null };
 
         const year = getYear(selectedDate);
         const month = getMonth(selectedDate);
+        const monthStr = format(selectedDate, 'yyyy-MM');
         const start = startOfMonth(selectedDate);
         const end = endOfMonth(selectedDate);
         const days = eachDayOfInterval({ start, end });
+
+        const currentRate = getEffectiveRate(customer.rateHistory, monthStr);
 
         const filteredMilkEntries = entries.filter(entry => {
             const entryDate = new Date(entry.date);
@@ -53,40 +61,48 @@ export default function SummaryPage() {
             const cowQty = (customer.milkTypes.includes('cow') ? entry.cowQuantity : 0) || 0;
             const buffaloQty = (customer.milkTypes.includes('buffalo') ? entry.buffaloQuantity : 0) || 0;
             
-            acc.cowQuantity += cowQty;
-            acc.buffaloQuantity += buffaloQty;
-            acc.cowTotalAmount += cowQty * (entry.cowRate || 0);
-            acc.buffaloTotalAmount += buffaloQty * (entry.buffaloRate || 0);
+            const cowRate = Number(currentRate?.cowRate ?? entry.cowRate || 0);
+            const buffaloRate = Number(currentRate?.buffaloRate ?? entry.buffaloRate || 0);
+
+            acc.cowQuantity += Number(cowQty);
+            acc.buffaloQuantity += Number(buffaloQty);
+            acc.cowTotalAmount += Number(cowQty) * cowRate;
+            acc.buffaloTotalAmount += Number(buffaloQty) * buffaloRate;
             return acc;
         }, { cowQuantity: 0, buffaloQuantity: 0, cowTotalAmount: 0, buffaloTotalAmount: 0 });
         
         const milkTotalAmount = milkTotals.cowTotalAmount + milkTotals.buffaloTotalAmount;
 
         const productTotals = filteredProductEntries.reduce((acc, entry) => {
+            const due = Number(entry.price) - (Number(entry.paidAmount) || 0);
             if (entry.productType === 'paneer') {
-                acc.paneerQuantity += entry.quantity;
-                acc.paneerTotalAmount += entry.price;
+                acc.paneerQuantity += Number(entry.quantity);
+                acc.paneerTotalAmount += due;
             } else if (entry.productType === 'ghee') {
-                acc.gheeQuantity += entry.quantity;
-                acc.gheeTotalAmount += entry.price;
+                acc.gheeQuantity += Number(entry.quantity);
+                acc.gheeTotalAmount += due;
             }
+            acc.productsDueAmount += due;
             return acc;
-        }, { paneerQuantity: 0, paneerTotalAmount: 0, gheeQuantity: 0, gheeTotalAmount: 0 });
+        }, { paneerQuantity: 0, paneerTotalAmount: 0, gheeQuantity: 0, gheeTotalAmount: 0, productsDueAmount: 0 });
 
-        const productsTotalAmount = productTotals.paneerTotalAmount + productTotals.gheeTotalAmount;
-        const grandTotal = milkTotalAmount + productsTotalAmount;
+        const grandTotal = milkTotalAmount + productTotals.productsDueAmount;
 
         const timeline = [
             ...filteredMilkEntries.map(e => ({ type: 'milk' as const, data: e, date: e.date })),
             ...filteredProductEntries.map(e => ({ type: 'product' as const, data: e, date: e.date })),
         ].sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-        return { monthlyTimeline: timeline, totals: { ...milkTotals, milkTotalAmount, ...productTotals, productsTotalAmount, grandTotal }, calendarDays: days };
-    }, [entries, productEntries, id, selectedDate, customer]);
+        return { monthlyTimeline: timeline, totals: { ...milkTotals, milkTotalAmount, ...productTotals, grandTotal }, calendarDays: days, effectiveRate: currentRate };
+    }, [entries, productEntries, id, selectedDate, customer, getEffectiveRate]);
     
     const generatePdf = async (type: 'view' | 'share' | 'download') => {
         if (!customer) return;
         
+        if (billMode === 'thermal') {
+            return generateThermalPdf(type);
+        }
+
         const doc = new jsPDF({ unit: 'mm', format: 'a4' });
         const margin = 15;
         const pageWidth = doc.internal.pageSize.getWidth();
@@ -134,7 +150,7 @@ export default function SummaryPage() {
         doc.setFont('helvetica', 'bold');
         doc.text(safeT('grandTotal').toUpperCase(), margin + 6, 65);
         doc.setFontSize(22);
-        doc.text(`Rs. ${totals.grandTotal.toFixed(2)}`, margin + 6, 74);
+        doc.text(`Rs. ${Number(totals.grandTotal).toFixed(2)}`, margin + 6, 74);
 
         const entriesMap = new Map(monthlyTimeline.filter(i => i.type === 'milk').map(e => [e.date, e.data]));
         const half = Math.ceil(calendarDays.length / 2);
@@ -154,8 +170,8 @@ export default function SummaryPage() {
 
             const formatMilkVal = (entry: any) => {
                 if (!entry) return '';
-                const c = entry.cowQuantity || 0;
-                const b = entry.buffaloQuantity || 0;
+                const c = Number(entry.cowQuantity) || 0;
+                const b = Number(entry.buffaloQuantity) || 0;
                 if (c + b === 0) return '-';
                 if (hasCow && hasBuff) return `${c.toFixed(2)} + ${b.toFixed(2)}`;
                 return (hasCow ? c.toFixed(2) : b.toFixed(2));
@@ -184,25 +200,27 @@ export default function SummaryPage() {
 
         const summaryRows = [];
         if (totals.cowQuantity > 0) {
+            const cowRate = Number(effectiveRate?.cowRate ?? (totals.cowTotalAmount / totals.cowQuantity) || 0);
             summaryRows.push([
                 `${safeT('totalCowMilk').toUpperCase()}:`, 
-                `${totals.cowQuantity.toFixed(2)} L x Rs. ${(totals.cowTotalAmount / totals.cowQuantity).toFixed(2)}`,
-                `Rs. ${totals.cowTotalAmount.toFixed(2)}`
+                `${Number(totals.cowQuantity).toFixed(2)} L x Rs. ${cowRate.toFixed(2)}`,
+                `Rs. ${Number(totals.cowTotalAmount).toFixed(2)}`
             ]);
         }
         if (totals.buffaloQuantity > 0) {
+            const buffRate = Number(effectiveRate?.buffaloRate ?? (totals.buffaloTotalAmount / totals.buffaloQuantity) || 0);
             summaryRows.push([
                 `${safeT('totalBuffaloMilk').toUpperCase()}:`, 
-                `${totals.buffaloQuantity.toFixed(2)} L x Rs. ${(totals.buffaloTotalAmount / totals.buffaloQuantity).toFixed(2)}`,
-                `Rs. ${totals.buffaloTotalAmount.toFixed(2)}`
+                `${Number(totals.buffaloQuantity).toFixed(2)} L x Rs. ${buffRate.toFixed(2)}`,
+                `Rs. ${Number(totals.buffaloTotalAmount).toFixed(2)}`
             ]);
         }
         
         summaryRows.push([{ content: '', colSpan: 3, styles: { minCellHeight: 2 } }]);
-        summaryRows.push([safeT('subTotal').toUpperCase(), '', `Rs. ${totals.milkTotalAmount.toFixed(2)}`]);
+        summaryRows.push([safeT('subTotal').toUpperCase(), '', `Rs. ${Number(totals.milkTotalAmount).toFixed(2)}`]);
 
-        if (totals.paneerTotalAmount > 0) summaryRows.push([safeT('paneer').toUpperCase(), `${totals.paneerQuantity.toFixed(1)} kg`, `+ Rs. ${totals.paneerTotalAmount.toFixed(2)}`]);
-        if (totals.gheeTotalAmount > 0) summaryRows.push([safeT('ghee').toUpperCase(), `${totals.gheeQuantity.toFixed(1)} kg`, `+ Rs. ${totals.gheeTotalAmount.toFixed(2)}`]);
+        if (totals.paneerTotalAmount !== 0) summaryRows.push([safeT('paneer').toUpperCase(), `${Number(totals.paneerQuantity).toFixed(1)} kg`, `${totals.paneerTotalAmount > 0 ? '+' : ''} Rs. ${Number(totals.paneerTotalAmount).toFixed(2)}`]);
+        if (totals.gheeTotalAmount !== 0) summaryRows.push([safeT('ghee').toUpperCase(), `${Number(totals.gheeQuantity).toFixed(1)} kg`, `${totals.gheeTotalAmount > 0 ? '+' : ''} Rs. ${Number(totals.gheeTotalAmount).toFixed(2)}`]);
         
         autoTable(doc, {
             body: summaryRows,
@@ -222,10 +240,131 @@ export default function SummaryPage() {
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(primaryBlue[0], primaryBlue[1], primaryBlue[2]);
         doc.text(safeT('grandTotal').toUpperCase(), margin, currentY);
-        doc.text(`Rs. ${totals.grandTotal.toFixed(2)}`, pageWidth - margin - doc.getTextWidth(`Rs. ${totals.grandTotal.toFixed(2)}`), currentY);
+        doc.text(`Rs. ${Number(totals.grandTotal).toFixed(2)}`, pageWidth - margin - doc.getTextWidth(`Rs. ${Number(totals.grandTotal).toFixed(2)}`), currentY);
 
         const filename = `${customer.name.replace(/\s+/g, '_')}_Bill_${format(selectedDate, 'MMM_yyyy')}.pdf`;
+        finalizePdf(doc, filename, type);
+    };
+
+    const generateThermalPdf = async (type: 'view' | 'share' | 'download') => {
+        if (!customer) return;
         
+        const receiptWidth = 80;
+        const margin = 5;
+        
+        // Estimate height
+        const entriesWithData = calendarDays.filter(d => entries.find(e => e.customerId === id && e.date === format(d, 'yyyy-MM-dd')));
+        const estimatedHeight = 50 + (entriesWithData.length * 5) + 80;
+        
+        const doc = new jsPDF({ unit: 'mm', format: [receiptWidth, estimatedHeight] });
+        let currentY = 10;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(14);
+        doc.text('MILKLEDGER', receiptWidth / 2, currentY, { align: 'center' });
+        currentY += 5;
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.text(safeT('monthlyMilkStatement').toUpperCase(), receiptWidth / 2, currentY, { align: 'center' });
+        currentY += 8;
+
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.text(customer.name.toUpperCase(), margin, currentY);
+        currentY += 5;
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`${format(selectedDate, 'MMMM yyyy').toUpperCase()}`, margin, currentY);
+        doc.text(`DATE: ${format(new Date(), 'dd/MM/yyyy')}`, receiptWidth - margin, currentY, { align: 'right' });
+        currentY += 4;
+
+        doc.setDrawColor(200);
+        doc.line(margin, currentY, receiptWidth - margin, currentY);
+        currentY += 5;
+
+        // Entries Table - Include zero entries
+        const tableData = calendarDays
+            .map(date => {
+                const dateStr = format(date, 'yyyy-MM-dd');
+                const entry = entries.find(e => e.customerId === id && e.date === dateStr);
+                if (!entry) return null;
+                
+                const c = Number(entry.cowQuantity) || 0;
+                const b = Number(entry.buffaloQuantity) || 0;
+                
+                if (c + b === 0) return [format(date, 'dd MMM'), '-'];
+                
+                const qty = [];
+                if (customer.milkTypes.includes('cow') && c > 0) qty.push(`${c}L(C)`);
+                if (customer.milkTypes.includes('buffalo') && b > 0) qty.push(`${b}L(B)`);
+                
+                return [format(date, 'dd MMM'), qty.join(' + ')];
+            })
+            .filter(Boolean);
+
+        autoTable(doc, {
+            head: [['DATE', 'QUANTITY']],
+            body: tableData as any,
+            startY: currentY,
+            theme: 'plain',
+            styles: { fontSize: 8, cellPadding: 1, halign: 'center', font: 'helvetica' },
+            headStyles: { fontStyle: 'bold', halign: 'center' },
+            columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right', fontStyle: 'bold' } },
+            margin: { left: margin, right: margin }
+        });
+
+        currentY = (doc as any).lastAutoTable.finalY + 5;
+        doc.line(margin, currentY, receiptWidth - margin, currentY);
+        currentY += 6;
+
+        const addRow = (label: string, val: string, isBold = false) => {
+            doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+            doc.text(label, margin, currentY);
+            doc.text(val, receiptWidth - margin, currentY, { align: 'right' });
+            currentY += 5;
+        };
+
+        // Bold formatting for Qty and Rate
+        if (totals.cowQuantity > 0) {
+            const cowRate = Number(effectiveRate?.cowRate ?? (totals.cowTotalAmount / totals.cowQuantity) || 0);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`${safeT('cow')}: ${Number(totals.cowQuantity).toFixed(2)}L x ₹${cowRate.toFixed(0)}`, margin, currentY);
+            doc.text(`₹${Number(totals.cowTotalAmount).toFixed(0)}`, receiptWidth - margin, currentY, { align: 'right' });
+            currentY += 5;
+        }
+        if (totals.buffaloQuantity > 0) {
+            const buffRate = Number(effectiveRate?.buffaloRate ?? (totals.buffaloTotalAmount / totals.buffaloQuantity) || 0);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`${safeT('buffalo')}: ${Number(totals.buffaloQuantity).toFixed(2)}L x ₹${buffRate.toFixed(0)}`, margin, currentY);
+            doc.text(`₹${Number(totals.buffaloTotalAmount).toFixed(0)}`, receiptWidth - margin, currentY, { align: 'right' });
+            currentY += 5;
+        }
+        
+        if (totals.paneerTotalAmount !== 0) {
+            addRow(`${safeT('paneer')}: ${Number(totals.paneerQuantity).toFixed(1)}kg`, `₹${Number(totals.paneerTotalAmount).toFixed(0)}`, true);
+        }
+        if (totals.gheeTotalAmount !== 0) {
+            addRow(`${safeT('ghee')}: ${Number(totals.gheeQuantity).toFixed(1)}kg`, `₹${Number(totals.gheeTotalAmount).toFixed(0)}`, true);
+        }
+
+        currentY += 3;
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text(safeT('grandTotal').toUpperCase(), receiptWidth / 2, currentY, { align: 'center' });
+        currentY += 7;
+        doc.setFontSize(16);
+        doc.text(`₹${Number(totals.grandTotal).toFixed(0)}`, receiptWidth / 2, currentY, { align: 'center' });
+        
+        currentY += 10;
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'italic');
+        doc.text(safeT('thankYou'), receiptWidth / 2, currentY, { align: 'center' });
+
+        const filename = `${customer.name.replace(/\s+/g, '_')}_Receipt_${format(selectedDate, 'MMM_yyyy')}.pdf`;
+        finalizePdf(doc, filename, type);
+    };
+
+    const finalizePdf = async (doc: jsPDF, filename: string, type: 'view' | 'share' | 'download') => {
         if (type === 'download') {
             doc.save(filename);
         } else if (type === 'view') {
@@ -241,7 +380,7 @@ export default function SummaryPage() {
                 if (navigator.canShare({ files: [file] })) {
                     await navigator.share({ files: [file], title: filename });
                 } else {
-                    toast({ variant: "destructive", title: "Share failed", description: "PDF sharing restricted by browser." });
+                    toast({ variant: "destructive", title: "Share failed", description: "PDF sharing restricted." });
                 }
             } catch (err: any) {
                 if (err.name !== 'AbortError') toast({ variant: "destructive", title: "Share failed", description: "Could not open share menu." });
@@ -260,8 +399,8 @@ export default function SummaryPage() {
     if (!isDataLoaded) return <div className="container py-10 text-center animate-pulse text-slate-300 font-black tracking-widest uppercase">Loading statement...</div>;
     if (!customer) return <div className="p-10 text-center text-slate-900 font-black">{safeT('noCustomersFound')}</div>;
 
-    const cowAvgRate = totals.cowQuantity > 0 ? (totals.cowTotalAmount / totals.cowQuantity) : 0;
-    const buffaloAvgRate = totals.buffaloQuantity > 0 ? (totals.buffaloTotalAmount / totals.buffaloQuantity) : 0;
+    const cowAvgRate = Number(effectiveRate?.cowRate ?? (totals.cowQuantity > 0 ? (totals.cowTotalAmount / totals.cowQuantity) : 0) || 0);
+    const buffaloAvgRate = Number(effectiveRate?.buffaloRate ?? (totals.buffaloQuantity > 0 ? (totals.buffaloTotalAmount / totals.buffaloQuantity) : 0) || 0);
 
     return (
         <div className="container py-4 max-w-3xl page-transition">
@@ -269,55 +408,97 @@ export default function SummaryPage() {
                 <ChevronLeft className="w-3 h-3"/> {safeT('backToSummary')}
             </Link>
             
-            <div className="flex justify-between items-end mb-4 px-1 gap-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-4 px-1 gap-4">
                 <div>
                     <h1 className="text-2xl font-black text-slate-900 tracking-tight leading-none">{customer.name}</h1>
                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">{safeT('monthlySummary')}</p>
                 </div>
                 
-                <div className="flex flex-col gap-1.5 min-w-[140px]">
-                    <div className="grid grid-cols-2 gap-1">
-                        <Select value={getMonth(selectedDate).toString()} onValueChange={(m) => setSelectedDate(setMonth(selectedDate, parseInt(m)))}>
-                            <SelectTrigger className="h-8 bg-slate-50 border-slate-200 text-[10px] font-black"><SelectValue /></SelectTrigger>
-                            <SelectContent>{months.map(m => <SelectItem key={m.value} value={m.value.toString()} className="text-[10px] font-black">{m.name}</SelectItem>)}</SelectContent>
-                        </Select>
-                        <Select value={getYear(selectedDate).toString()} onValueChange={(y) => setSelectedDate(setYear(selectedDate, parseInt(y)))}>
-                            <SelectTrigger className="h-8 bg-slate-50 border-slate-200 text-[10px] font-black"><SelectValue /></SelectTrigger>
-                            <SelectContent>{years.map(y => <SelectItem key={y} value={y.toString()} className="text-[10px] font-black">{y}</SelectItem>)}</SelectContent>
-                        </Select>
+                <div className="flex flex-col gap-2 w-full sm:w-auto">
+                    <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+                        <Button 
+                            variant={billMode === 'a4' ? 'secondary' : 'ghost'} 
+                            size="sm" 
+                            onClick={() => setBillMode('a4')}
+                            className="h-8 rounded-lg text-[10px] font-black uppercase flex-1 sm:flex-none"
+                        >
+                            <FileText className="mr-1.5 h-3 w-3" />
+                            {safeT('professionalMode')}
+                        </Button>
+                        <Button 
+                            variant={billMode === 'thermal' ? 'secondary' : 'ghost'} 
+                            size="sm" 
+                            onClick={() => setBillMode('thermal')}
+                            className="h-8 rounded-lg text-[10px] font-black uppercase flex-1 sm:flex-none"
+                        >
+                            <Smartphone className="mr-1.5 h-3 w-3" />
+                            {safeT('thermalMode')}
+                        </Button>
                     </div>
-                    <div className="grid grid-cols-3 gap-1">
-                        <Button onClick={() => generatePdf('view')} variant="outline" className="h-8 px-0 border-slate-200"><Eye className="h-3.5 w-3.5 text-slate-400" /></Button>
-                        <Button onClick={() => generatePdf('share')} variant="outline" className="h-8 px-0 border-slate-200"><Share2 className="h-3.5 w-3.5 text-slate-400" /></Button>
-                        <Button onClick={() => generatePdf('download')} className="h-8 px-0 bg-primary text-white"><Download className="h-3.5 w-3.5" /></Button>
+
+                    <div className="flex flex-wrap gap-1.5 min-w-[200px]">
+                        <div className="grid grid-cols-2 gap-1 flex-1">
+                            <Select value={getMonth(selectedDate).toString()} onValueChange={(m) => setSelectedDate(setMonth(selectedDate, parseInt(m)))}>
+                                <SelectTrigger className="h-8 bg-slate-50 border-slate-200 text-[10px] font-black"><SelectValue /></SelectTrigger>
+                                <SelectContent>{months.map(m => <SelectItem key={m.value} value={m.value.toString()} className="text-[10px] font-black">{m.name}</SelectItem>)}</SelectContent>
+                            </Select>
+                            <Select value={getYear(selectedDate).toString()} onValueChange={(y) => setSelectedDate(setYear(selectedDate, parseInt(y)))}>
+                                <SelectTrigger className="h-8 bg-slate-50 border-slate-200 text-[10px] font-black"><SelectValue /></SelectTrigger>
+                                <SelectContent>{years.map(y => <SelectItem key={y} value={y.toString()} className="text-[10px] font-black">{y}</SelectItem>)}</SelectContent>
+                            </Select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1 flex-1">
+                            <Button onClick={() => generatePdf('view')} variant="outline" className="h-8 gap-1.5 border-slate-200 text-[10px] font-black uppercase flex-1">
+                                <Eye className="h-3.5 w-3.5 text-slate-400" />
+                                {safeT('viewPDF')}
+                            </Button>
+                            <Button onClick={() => generatePdf('share')} variant="outline" className="h-8 gap-1.5 border-slate-200 text-[10px] font-black uppercase flex-1">
+                                <Share2 className="h-3.5 w-3.5 text-slate-400" />
+                                {safeT('sharePDF')}
+                            </Button>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <Card className="mb-6 rounded-2xl overflow-hidden border-0 shadow-xl bg-slate-900 text-white p-5 relative">
-                <div className="absolute top-0 right-0 p-4 opacity-[0.06]"><Milk className="h-24 w-24" /></div>
+                <div className="absolute top-0 right-0 p-4 opacity-[0.06] pointer-events-none"><Milk className="h-24 w-24" /></div>
                 
-                <div className="mb-1">
-                    <p className="text-white/40 font-black text-[10px] uppercase tracking-widest flex flex-wrap gap-x-2">
-                        {totals.cowQuantity > 0 && <span>{totals.cowQuantity.toFixed(2)}L {safeT('cow')} @ ₹{cowAvgRate.toFixed(0)}</span>}
-                        {totals.cowQuantity > 0 && totals.buffaloQuantity > 0 && <span>+</span>}
-                        {totals.buffaloQuantity > 0 && <span>{totals.buffaloQuantity.toFixed(2)}L {safeT('buffalo')} @ ₹{buffaloAvgRate.toFixed(0)}</span>}
-                        {(totals.paneerTotalAmount > 0 || totals.gheeTotalAmount > 0) && <span>+ Extras</span>}
-                    </p>
+                <div className="relative z-10 flex justify-between items-start mb-2">
+                    <div className="flex-1">
+                        <p className="text-white/40 font-black text-[10px] uppercase tracking-widest flex flex-wrap gap-x-2">
+                            {totals.cowQuantity > 0 && <span>{Number(totals.cowQuantity).toFixed(2)}L {safeT('cow')} @ ₹{cowAvgRate.toFixed(0)}</span>}
+                            {totals.cowQuantity > 0 && totals.buffaloQuantity > 0 && <span>+</span>}
+                            {totals.buffaloQuantity > 0 && <span>{Number(totals.buffaloQuantity).toFixed(2)}L {safeT('buffalo')} @ ₹{buffaloAvgRate.toFixed(0)}</span>}
+                            {(totals.productsDueAmount !== 0) && <span>+ Extras</span>}
+                        </p>
+                    </div>
+                    <Button 
+                        onClick={() => setRateDialogOpen(true)}
+                        variant="outline" 
+                        size="sm" 
+                        className="h-8 px-2.5 rounded-lg border-white/20 bg-white/5 text-[10px] font-black uppercase text-primary hover:bg-white/10 transition-all active:scale-95 shadow-lg relative z-20"
+                    >
+                        <TrendingUp className="mr-1.5 h-3 w-3" />
+                        {t('changeRate')}
+                    </Button>
                 </div>
                 
-                <h2 className="text-5xl font-black tracking-tighter">₹{totals.grandTotal.toFixed(2)}</h2>
-                <p className="text-white/60 font-black text-[9px] uppercase tracking-[0.2em] mt-1">{safeT('grandTotal')}</p>
+                <h2 className="relative z-10 text-5xl font-black tracking-tighter">₹{Number(totals.grandTotal).toFixed(2)}</h2>
+                <p className="relative z-10 text-white/60 font-black text-[9px] uppercase tracking-[0.2em] mt-1">{safeT('grandTotal')}</p>
 
-                <div className="flex gap-6 mt-4 border-t border-white/10 pt-4">
+                <div className="relative z-10 flex gap-6 mt-4 border-t border-white/10 pt-4">
                     <div>
                         <p className="text-[8px] font-black text-white/40 uppercase tracking-widest">{safeT('totalMilk')}</p>
-                        <p className="text-sm font-bold">{(totals.cowQuantity + totals.buffaloQuantity).toFixed(2)} L</p>
+                        <p className="text-sm font-bold">{(Number(totals.cowQuantity) + Number(totals.buffaloQuantity)).toFixed(2)} L</p>
                     </div>
-                    {totals.productsTotalAmount > 0 && (
+                    {totals.productsDueAmount !== 0 && (
                         <div className="border-l border-white/10 pl-6">
                             <p className="text-[8px] font-black text-white/40 uppercase tracking-widest">{safeT('products')}</p>
-                            <p className="text-sm font-bold text-accent">₹{totals.productsTotalAmount.toFixed(0)}</p>
+                            <p className={cn("text-sm font-bold", totals.productsDueAmount > 0 ? "text-accent" : "text-emerald-400")}>
+                                ₹{Number(totals.productsDueAmount).toFixed(0)}
+                                {totals.productsDueAmount < 0 && <span className="text-[8px] ml-1 uppercase">({t('advanceAmount')})</span>}
+                            </p>
                         </div>
                     )}
                 </div>
@@ -358,36 +539,51 @@ export default function SummaryPage() {
                                         <div>
                                             <p className="font-black text-slate-900 text-[11px]">{format(day, 'dd MMM')}</p>
                                             <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
-                                                {milkEntry ? `₹${((milkEntry.cowQuantity * milkEntry.cowRate) + (milkEntry.buffaloQuantity * milkEntry.buffaloRate)).toFixed(0)}` : " "}
+                                                {milkEntry ? `₹${((Number(milkEntry.cowQuantity) * Number(effectiveRate?.cowRate ?? milkEntry.cowRate)) + (Number(milkEntry.buffaloQuantity) * Number(effectiveRate?.buffaloRate ?? milkEntry.buffaloRate))).toFixed(0)}` : " "}
                                             </p>
                                         </div>
                                     </div>
                                     <p className="font-black text-slate-900 text-sm text-right">
                                         {!milkEntry ? (
                                             " "
-                                        ) : (milkEntry.cowQuantity + milkEntry.buffaloQuantity === 0) ? (
+                                        ) : (Number(milkEntry.cowQuantity) + Number(milkEntry.buffaloQuantity) === 0) ? (
                                             "-"
                                         ) : (
                                             <>
-                                                {customer.milkTypes.includes('cow') && (milkEntry.cowQuantity ?? 0) > 0 && `${milkEntry.cowQuantity}L `}
-                                                {customer.milkTypes.includes('buffalo') && (milkEntry.buffaloQuantity ?? 0) > 0 && `${milkEntry.buffaloQuantity}L`}
+                                                {customer.milkTypes.includes('cow') && Number(milkEntry.cowQuantity) > 0 && `${milkEntry.cowQuantity}L `}
+                                                {customer.milkTypes.includes('buffalo') && Number(milkEntry.buffaloQuantity) > 0 && `${milkEntry.buffaloQuantity}L`}
                                             </>
                                         )}
                                     </p>
                                 </div>
                                 
-                                {dayProducts.map(p => (
-                                    <div key={p.id} className="glass-card flex items-center justify-between p-3 rounded-xl border-slate-50 bg-secondary/5 ml-4">
-                                        <div className="flex items-center gap-3">
-                                            <div className="bg-secondary/10 p-2 rounded-lg"><Milk className="h-4 w-4 text-secondary" /></div>
-                                            <div>
-                                                <p className="font-black text-slate-900 text-[11px]">{safeT(p.productType as ProductType)}</p>
-                                                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">₹{p.price.toFixed(0)}</p>
+                                {dayProducts.map(p => {
+                                    const due = Number(p.price) - (Number(p.paidAmount) || 0);
+                                    return (
+                                        <div key={p.id} className="glass-card flex items-center justify-between p-3 rounded-xl border-slate-50 bg-secondary/5 ml-4">
+                                            <div className="flex items-center gap-3">
+                                                <div className="bg-secondary/10 p-2 rounded-lg"><Milk className="h-4 w-4 text-secondary" /></div>
+                                                <div>
+                                                    <p className="font-black text-slate-900 text-[11px]">{safeT(p.productType as ProductType)}</p>
+                                                    <div className="flex items-center gap-2">
+                                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Total: ₹{Number(p.price).toFixed(0)}</p>
+                                                        {Number(p.paidAmount) > 0 && (
+                                                            <p className="text-[9px] font-bold text-emerald-500 uppercase tracking-wider flex items-center gap-1">
+                                                                <CreditCard className="h-2 w-2" /> Paid: ₹{Number(p.paidAmount).toFixed(0)}
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="text-right">
+                                                <p className="font-black text-slate-900 text-sm">{Number(p.quantity).toFixed(1)}kg</p>
+                                                <p className={cn("text-[9px] font-black uppercase tracking-tighter", due <= 0 ? "text-emerald-500" : "text-rose-500")}>
+                                                    {due <= 0 ? (due < 0 ? `Adv: ₹${Math.abs(due)}` : "Paid") : `Due: ₹${due}`}
+                                                </p>
                                             </div>
                                         </div>
-                                        <p className="font-black text-slate-900 text-sm">{p.quantity}kg</p>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         );
                     })}
@@ -400,6 +596,13 @@ export default function SummaryPage() {
                 type="customer" 
                 id={id} 
                 selectedMonth={selectedDate} 
+            />
+
+            <RateChangeDialog
+                open={rateDialogOpen}
+                onOpenChange={setRateDialogOpen}
+                entityId={id}
+                type="customer"
             />
         </div>
     );

@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 
 export function ReminderCard({ customer, date }: { customer: Customer, date?: Date }) {
-    const { addOrUpdateEntry, t } = useAppContext();
+    const { addOrUpdateEntry, getLatestPreviousQuantities, t } = useAppContext();
     const { toast } = useToast();
     const activeDate = date || new Date();
     const dateString = format(activeDate, 'yyyy-MM-dd');
@@ -22,11 +22,18 @@ export function ReminderCard({ customer, date }: { customer: Customer, date?: Da
     const [isNoMilk, setIsNoMilk] = useState(false);
     
     useEffect(() => {
-        const milkTypes = customer.milkTypes || [];
-        setCowQuantity(milkTypes.includes('cow') ? (customer.defaultCowQuantity ?? 0) : 0);
-        setBuffaloQuantity(milkTypes.includes('buffalo') ? (customer.defaultBuffaloQuantity ?? 0) : 0);
+        // AUTO-FILL FROM PREVIOUS
+        const prev = getLatestPreviousQuantities(customer.id, dateString);
+        if (prev) {
+            setCowQuantity(prev.cow);
+            setBuffaloQuantity(prev.buffalo);
+        } else {
+            const milkTypes = customer.milkTypes || [];
+            setCowQuantity(milkTypes.includes('cow') ? (customer.defaultCowQuantity ?? 0) : 0);
+            setBuffaloQuantity(milkTypes.includes('buffalo') ? (customer.defaultBuffaloQuantity ?? 0) : 0);
+        }
         setIsNoMilk(false);
-    }, [customer, dateString]);
+    }, [customer, dateString, getLatestPreviousQuantities]);
 
     const handleSave = () => {
         addOrUpdateEntry({

@@ -3,8 +3,9 @@
 import { useState, useMemo } from "react";
 import { useAppContext } from "@/context/AppContext";
 import { Button } from "@/components/ui/button";
-import { Plus, MoreVertical, Edit, Trash2, Home, Search, X, Users } from "lucide-react";
+import { Plus, MoreVertical, Edit, Trash2, Home, Search, X, Users, ArrowUpDown } from "lucide-react";
 import { CustomerDialog } from "@/components/CustomerDialog";
+import { ReorderDialog } from "@/components/ReorderDialog";
 import type { Customer } from "@/lib/types";
 import {
   DropdownMenu,
@@ -30,6 +31,7 @@ import { Badge } from "@/components/ui/badge";
 export default function CustomersPage() {
   const { customers, deleteCustomer, t, isDataLoaded } = useAppContext();
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [reorderOpen, setReorderOpen] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
@@ -44,12 +46,11 @@ export default function CustomersPage() {
     setDialogOpen(true);
   };
 
+  // Strictly follow AppContext orderIndex
   const filteredCustomers = useMemo(() => {
-    return customers
-      .filter((c) => {
-        return c.name.toLowerCase().includes(searchTerm.toLowerCase());
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
+    return customers.filter((c) => {
+      return c.name.toLowerCase().includes(searchTerm.toLowerCase());
+    });
   }, [customers, searchTerm]);
 
   if (!isDataLoaded) {
@@ -70,7 +71,7 @@ export default function CustomersPage() {
   
   return (
     <div className="container py-8 max-w-2xl page-transition">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-10 gap-4">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <div>
           <Link href="/" className="text-[10px] font-black text-secondary hover:text-primary flex items-center gap-1.5 mb-2 uppercase tracking-widest transition-colors">
             <Home className="w-3 h-3"/> {t('backToHome')}
@@ -82,10 +83,24 @@ export default function CustomersPage() {
             </Badge>
           </div>
         </div>
-        <Button onClick={handleAdd} size="lg" className="w-full sm:w-auto font-black rounded-2xl bg-primary hover:bg-primary/90 shadow-xl shadow-primary/20 text-white">
-          <Plus className="mr-2 h-5 w-5" />
-          {t('addCustomer')}
-        </Button>
+        <div className="flex gap-2 w-full sm:w-auto">
+            <Button 
+                onClick={() => setReorderOpen(true)} 
+                variant="outline" 
+                className="flex-1 sm:flex-none h-12 rounded-2xl font-black border-slate-200 px-2 text-[10px] sm:text-xs md:text-sm min-w-0"
+            >
+                <ArrowUpDown className="mr-1.5 h-4 w-4 shrink-0" />
+                <span className="truncate">{t('manageEntryOrder')}</span>
+            </Button>
+            <Button 
+                onClick={handleAdd} 
+                size="lg" 
+                className="flex-1 sm:flex-none h-12 font-black rounded-2xl bg-primary hover:bg-primary/90 shadow-xl shadow-primary/20 text-white px-2 text-[10px] sm:text-xs md:text-sm min-w-0"
+            >
+                <Plus className="mr-1.5 h-5 w-5 shrink-0" />
+                <span className="truncate">{t('addCustomer')}</span>
+            </Button>
+        </div>
       </div>
 
       <div className="relative mb-6">
@@ -116,7 +131,10 @@ export default function CustomersPage() {
                     <Users className="h-6 w-6 text-primary" />
                 </div>
                 <div className="min-w-0">
-                  <p className="font-black text-lg text-slate-900 truncate leading-tight">{customer.name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-black text-lg text-slate-900 truncate leading-tight">{customer.name}</p>
+                    <Badge variant="outline" className="text-[8px] font-black text-slate-300 opacity-60 uppercase border-0 p-0">[{customer.order ?? 0}]</Badge>
+                  </div>
                   <p className="text-[10px] text-slate-500 uppercase tracking-widest font-black mt-1">
                     {(customer.milkTypes || []).map(t).join(' • ')}
                   </p>
@@ -171,6 +189,12 @@ export default function CustomersPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         customer={selectedCustomer}
+      />
+
+      <ReorderDialog
+        open={reorderOpen}
+        onOpenChange={setReorderOpen}
+        type="customer"
       />
 
       <AlertDialog open={!!deleteId} onOpenChange={(open) => !open && setDeleteId(null)}>

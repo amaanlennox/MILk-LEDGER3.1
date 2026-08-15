@@ -40,9 +40,10 @@ function CustomerListForProduct({ productType }: { productType: ProductType }) {
     )
   }
 
+  // Strictly follow AppContext order, only filtering by name search
   const filteredCustomers = customers.filter(customer =>
     customer.name.toLowerCase().includes(searchTerm.toLowerCase())
-  ).sort((a, b) => a.name.localeCompare(b.name));
+  );
 
   if (customers.length === 0) {
     return (

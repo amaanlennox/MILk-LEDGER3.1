@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { useAppContext } from "@/context/AppContext";
 import { Card } from "@/components/ui/card";
 import Link from "next/link";
-import { ChevronLeft, Share2, Eye, Milk, Download, Calendar as CalIcon, Tractor, Wallet, Trash2, Edit } from "lucide-react";
+import { ChevronLeft, Share2, Eye, Milk, Calendar as CalIcon, Tractor, Wallet, Trash2, TrendingUp, FileText, Smartphone, Edit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { format, getMonth, getYear, setMonth, setYear, startOfMonth, endOfMonth, eachDayOfInterval } from "date-fns";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,11 +15,12 @@ import { FarmerPaymentDialog } from "@/components/FarmerPaymentDialog";
 import { FarmerPayment } from "@/lib/types";
 import { useToast } from "@/hooks/use-toast";
 import { EditDailyEntriesDialog } from "@/components/EditDailyEntriesDialog";
+import { RateChangeDialog } from "@/components/RateChangeDialog";
 
 export default function FarmerSummaryPage() {
     const params = useParams();
     const id = params.id as string;
-    const { getFarmerById, farmerEntries, farmerPayments, t, isDataLoaded, deleteFarmerPayment } = useAppContext();
+    const { getFarmerById, farmerEntries, farmerPayments, getEffectiveRate, t, isDataLoaded, deleteFarmerPayment } = useAppContext();
     const { toast } = useToast();
 
     const farmer = getFarmerById(id);
@@ -27,20 +28,25 @@ export default function FarmerSummaryPage() {
     const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
     const [selectedPayment, setSelectedPayment] = useState<FarmerPayment | null>(null);
     const [editEntriesOpen, setEditEntriesOpen] = useState(false);
+    const [rateDialogOpen, setRateDialogOpen] = useState(false);
+    const [billMode, setBillMode] = useState<'a4' | 'thermal'>('a4');
 
     const safeT = (key: string) => {
         const val = t(key as any);
         return val || key;
     };
 
-    const { monthlyTimeline, totals, calendarDays, monthlyPaymentsList } = useMemo(() => {
-        if (!farmer) return { monthlyTimeline: [], totals: { cowQuantity: 0, buffaloQuantity: 0, milkTotalAmount: 0, cowTotalAmount: 0, buffaloTotalAmount: 0, paymentTotalAmount: 0, finalPayableAmount: 0 }, calendarDays: [], monthlyPaymentsList: [] };
+    const { monthlyTimeline, totals, calendarDays, effectiveRate } = useMemo(() => {
+        if (!farmer) return { monthlyTimeline: [], totals: { cowQuantity: 0, buffaloQuantity: 0, milkTotalAmount: 0, cowTotalAmount: 0, buffaloTotalAmount: 0, paymentTotalAmount: 0, finalPayableAmount: 0 }, calendarDays: [], effectiveRate: null };
 
         const year = getYear(selectedDate);
         const month = getMonth(selectedDate);
+        const monthStr = format(selectedDate, 'yyyy-MM');
         const start = startOfMonth(selectedDate);
         const end = endOfMonth(selectedDate);
         const days = eachDayOfInterval({ start, end });
+
+        const currentRate = getEffectiveRate(farmer.rateHistory, monthStr);
 
         const monthlyMilkEntries = farmerEntries.filter(entry => {
             const entryDate = new Date(entry.date);
@@ -56,15 +62,18 @@ export default function FarmerSummaryPage() {
             const cowQty = (farmer.milkTypes.includes('cow') ? entry.cowQuantity : 0) || 0;
             const buffaloQty = (farmer.milkTypes.includes('buffalo') ? entry.buffaloQuantity : 0) || 0;
             
-            acc.cowQuantity += cowQty;
-            acc.buffaloQuantity += buffaloQty;
-            acc.cowTotalAmount += cowQty * (entry.cowRate || 0);
-            acc.buffaloTotalAmount += buffaloQty * (entry.buffaloRate || 0);
+            const cowRate = Number(currentRate?.cowRate ?? entry.cowRate || 0);
+            const buffaloRate = Number(currentRate?.buffaloRate ?? entry.buffaloRate || 0);
+
+            acc.cowQuantity += Number(cowQty);
+            acc.buffaloQuantity += Number(buffaloQty);
+            acc.cowTotalAmount += Number(cowQty) * cowRate;
+            acc.buffaloTotalAmount += Number(buffaloQty) * buffaloRate;
             return acc;
         }, { cowQuantity: 0, buffaloQuantity: 0, cowTotalAmount: 0, buffaloTotalAmount: 0 });
         
         const milkTotalAmount = milkTotals.cowTotalAmount + milkTotals.buffaloTotalAmount;
-        const paymentTotalAmount = monthlyPayments.reduce((sum, p) => sum + p.amount, 0);
+        const paymentTotalAmount = monthlyPayments.reduce((sum, p) => sum + Number(p.amount), 0);
         const finalPayableAmount = milkTotalAmount - paymentTotalAmount;
 
         const timeline = [
@@ -76,13 +85,17 @@ export default function FarmerSummaryPage() {
             monthlyTimeline: timeline, 
             totals: { ...milkTotals, milkTotalAmount, paymentTotalAmount, finalPayableAmount }, 
             calendarDays: days,
-            monthlyPaymentsList: monthlyPayments
+            effectiveRate: currentRate
         };
-    }, [farmerEntries, farmerPayments, id, selectedDate, farmer]);
+    }, [farmerEntries, farmerPayments, id, selectedDate, farmer, getEffectiveRate]);
 
     const generatePdf = async (type: 'view' | 'share' | 'download') => {
         if (!farmer) return;
         
+        if (billMode === 'thermal') {
+            return generateThermalPdf(type);
+        }
+
         const doc = new jsPDF({ unit: 'mm', format: 'a4' });
         const margin = 15;
         const pageWidth = doc.internal.pageSize.getWidth();
@@ -130,7 +143,7 @@ export default function FarmerSummaryPage() {
         doc.setFont('helvetica', 'bold');
         doc.text(safeT('finalPayableAmount').toUpperCase(), margin + 6, 65);
         doc.setFontSize(22);
-        doc.text(`Rs. ${totals.finalPayableAmount.toFixed(2)}`, margin + 6, 74);
+        doc.text(`Rs. ${Number(totals.finalPayableAmount).toFixed(2)}`, margin + 6, 74);
 
         const entriesMap = new Map(monthlyTimeline.filter(i => i.type === 'milk').map(e => [e.date, e.data]));
         const half = Math.ceil(calendarDays.length / 2);
@@ -150,8 +163,8 @@ export default function FarmerSummaryPage() {
 
             const formatMilkVal = (entry: any) => {
                 if (!entry) return '';
-                const c = entry.cowQuantity || 0;
-                const b = entry.buffaloQuantity || 0;
+                const c = Number(entry.cowQuantity) || 0;
+                const b = Number(entry.buffaloQuantity) || 0;
                 if (c + b === 0) return '-';
                 if (hasCow && hasBuff) return `${c.toFixed(2)} + ${b.toFixed(2)}`;
                 return (hasCow ? c.toFixed(2) : b.toFixed(2));
@@ -180,22 +193,24 @@ export default function FarmerSummaryPage() {
 
         const calcRows = [];
         if (totals.cowQuantity > 0) {
+            const cowRate = Number(effectiveRate?.cowRate ?? (totals.cowTotalAmount / totals.cowQuantity) || 0);
             calcRows.push([
                 safeT('totalCowMilk').toUpperCase(),
-                `${totals.cowQuantity.toFixed(2)} L x Rs. ${(totals.cowTotalAmount / totals.cowQuantity).toFixed(2)}`,
-                `Rs. ${totals.cowTotalAmount.toFixed(2)}`
+                `${Number(totals.cowQuantity).toFixed(2)} L x Rs. ${cowRate.toFixed(2)}`,
+                `Rs. ${Number(totals.cowTotalAmount).toFixed(2)}`
             ]);
         }
         if (totals.buffaloQuantity > 0) {
+            const buffRate = Number(effectiveRate?.buffaloRate ?? (totals.buffaloTotalAmount / totals.buffaloQuantity) || 0);
             calcRows.push([
                 safeT('totalBuffaloMilk').toUpperCase(),
-                `${totals.buffaloQuantity.toFixed(2)} L x Rs. ${(totals.buffaloTotalAmount / totals.buffaloQuantity).toFixed(2)}`,
-                `Rs. ${totals.buffaloTotalAmount.toFixed(2)}`
+                `${Number(totals.buffaloQuantity).toFixed(2)} L x Rs. ${buffRate.toFixed(2)}`,
+                `Rs. ${Number(totals.buffaloTotalAmount).toFixed(2)}`
             ]);
         }
         
         calcRows.push([{ content: '', colSpan: 3, styles: { minCellHeight: 1.5 } }]);
-        calcRows.push([safeT('milkPurchaseTotal').toUpperCase(), '', `Rs. ${totals.milkTotalAmount.toFixed(2)}`]);
+        calcRows.push([safeT('milkPurchaseTotal').toUpperCase(), '', `Rs. ${Number(totals.milkTotalAmount).toFixed(2)}`]);
 
         autoTable(doc, {
             body: calcRows,
@@ -216,7 +231,7 @@ export default function FarmerSummaryPage() {
 
             const paymentRows = monthlyPaymentsListPdf.map(p => [
                 format(new Date(p.date), 'dd MMM'),
-                `- Rs. ${(p.data as any).amount.toFixed(2)}`,
+                `- Rs. ${Number((p.data as any).amount).toFixed(2)}`,
                 (p.data as any).note || safeT('advancePaid')
             ]);
 
@@ -239,9 +254,136 @@ export default function FarmerSummaryPage() {
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(primaryBlue[0], primaryBlue[1], primaryBlue[2]);
         doc.text(safeT('finalPayableAmount').toUpperCase(), margin, currentY);
-        doc.text(`Rs. ${totals.finalPayableAmount.toFixed(2)}`, pageWidth - margin - doc.getTextWidth(`Rs. ${totals.finalPayableAmount.toFixed(2)}`), currentY);
+        doc.text(`Rs. ${Number(totals.finalPayableAmount).toFixed(2)}`, pageWidth - margin - doc.getTextWidth(`Rs. ${Number(totals.finalPayableAmount).toFixed(2)}`), currentY);
 
-        const filename = `${farmer.name.replace(/\s+/g, '_')}_Bill_${format(selectedDate, 'MMM_yyyy')}.pdf`;
+        const filename = `${farmer.name.replace(/\s+/g, '_')}_Purchase_Bill_${format(selectedDate, 'MMM_yyyy')}.pdf`;
+        finalizePdf(doc, filename, type);
+    };
+
+    const generateThermalPdf = async (type: 'view' | 'share' | 'download') => {
+        if (!farmer) return;
+        
+        const receiptWidth = 80;
+        const margin = 5;
+        
+        const monthlyMilkEntries = monthlyTimeline.filter(i => i.type === 'milk');
+        const monthlyPayments = monthlyTimeline.filter(i => i.type === 'payment');
+        const estimatedHeight = 60 + (monthlyMilkEntries.length * 5) + (monthlyPayments.length * 5) + 100;
+        
+        const doc = new jsPDF({ unit: 'mm', format: [receiptWidth, estimatedHeight] });
+        let currentY = 10;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(14);
+        doc.text('MILKLEDGER', receiptWidth / 2, currentY, { align: 'center' });
+        currentY += 5;
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.text(safeT('milkPurchaseBill').toUpperCase(), receiptWidth / 2, currentY, { align: 'center' });
+        currentY += 8;
+
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'bold');
+        doc.text(farmer.name.toUpperCase(), margin, currentY);
+        currentY += 5;
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.text(`${format(selectedDate, 'MMMM yyyy').toUpperCase()}`, margin, currentY);
+        doc.text(`DATE: ${format(new Date(), 'dd/MM/yyyy')}`, receiptWidth - margin, currentY, { align: 'right' });
+        currentY += 4;
+
+        doc.setDrawColor(200);
+        doc.line(margin, currentY, receiptWidth - margin, currentY);
+        currentY += 5;
+
+        // Entries - Include zero entries
+        const tableData = calendarDays
+            .map(date => {
+                const dateStr = format(date, 'yyyy-MM-dd');
+                const entryItem = monthlyMilkEntries.find(i => i.date === dateStr);
+                if (!entryItem) return null;
+                
+                const entry = entryItem.data as any;
+                const c = Number(entry.cowQuantity) || 0;
+                const b = Number(entry.buffaloQuantity) || 0;
+                
+                if (c + b === 0) return [format(date, 'dd MMM'), '-'];
+                
+                const qty = [];
+                if (farmer.milkTypes.includes('cow') && c > 0) qty.push(`${c}L(C)`);
+                if (farmer.milkTypes.includes('buffalo') && b > 0) qty.push(`${b}L(B)`);
+                return [format(date, 'dd MMM'), qty.join(' + ')];
+            })
+            .filter(Boolean);
+
+        autoTable(doc, {
+            head: [['DATE', 'QUANTITY']],
+            body: tableData as any,
+            startY: currentY,
+            theme: 'plain',
+            styles: { fontSize: 8, cellPadding: 1, halign: 'center', font: 'helvetica' },
+            headStyles: { fontStyle: 'bold', halign: 'center' },
+            columnStyles: { 0: { halign: 'left' }, 1: { halign: 'right', fontStyle: 'bold' } },
+            margin: { left: margin, right: margin }
+        });
+
+        currentY = (doc as any).lastAutoTable.finalY + 5;
+        doc.line(margin, currentY, receiptWidth - margin, currentY);
+        currentY += 6;
+
+        // Bold formatting for Qty and Rate
+        if (totals.cowQuantity > 0) {
+            const cowRate = Number(effectiveRate?.cowRate ?? (totals.cowTotalAmount / totals.cowQuantity) || 0);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`${safeT('cow')}: ${Number(totals.cowQuantity).toFixed(2)}L x ₹${cowRate.toFixed(0)}`, margin, currentY);
+            doc.text(`₹${Number(totals.cowTotalAmount).toFixed(0)}`, receiptWidth - margin, currentY, { align: 'right' });
+            currentY += 5;
+        }
+        if (totals.buffaloQuantity > 0) {
+            const buffRate = Number(effectiveRate?.buffaloRate ?? (totals.buffaloTotalAmount / totals.buffaloQuantity) || 0);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`${safeT('buffalo')}: ${Number(totals.buffaloQuantity).toFixed(2)}L x ₹${buffRate.toFixed(0)}`, margin, currentY);
+            doc.text(`₹${Number(totals.buffaloTotalAmount).toFixed(0)}`, receiptWidth - margin, currentY, { align: 'right' });
+            currentY += 5;
+        }
+
+        // Payment History Breakdown
+        if (monthlyPayments.length > 0) {
+            currentY += 3;
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(8);
+            doc.text('ADVANCE PAYMENTS:', margin, currentY);
+            currentY += 5;
+            doc.setFont('helvetica', 'normal');
+            monthlyPayments.forEach(p => {
+                const pData = p.data as any;
+                const label = `${format(new Date(p.date), 'dd MMM')} ${pData.note ? `(${pData.note})` : ''}`;
+                const val = `- ₹${Number(pData.amount).toFixed(0)}`;
+                doc.text(label, margin, currentY);
+                doc.text(val, receiptWidth - margin, currentY, { align: 'right' });
+                currentY += 4;
+            });
+            currentY += 2;
+        }
+
+        currentY += 5;
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
+        doc.text(safeT('finalPayableAmount').toUpperCase(), receiptWidth / 2, currentY, { align: 'center' });
+        currentY += 7;
+        doc.setFontSize(16);
+        doc.text(`₹${Number(totals.finalPayableAmount).toFixed(0)}`, receiptWidth / 2, currentY, { align: 'center' });
+        
+        currentY += 10;
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'italic');
+        doc.text(safeT('thankYou'), receiptWidth / 2, currentY, { align: 'center' });
+
+        const filename = `${farmer.name.replace(/\s+/g, '_')}_Purchase_Receipt_${format(selectedDate, 'MMM_yyyy')}.pdf`;
+        finalizePdf(doc, filename, type);
+    };
+
+    const finalizePdf = async (doc: jsPDF, filename: string, type: 'view' | 'share' | 'download') => {
         if (type === 'download') {
             doc.save(filename);
         } else if (type === 'view') {
@@ -257,7 +399,7 @@ export default function FarmerSummaryPage() {
                 if (navigator.canShare({ files: [file] })) {
                     await navigator.share({ files: [file], title: filename });
                 } else {
-                    toast({ variant: "destructive", title: "Share failed", description: "PDF sharing restricted by browser." });
+                    toast({ variant: "destructive", title: "Share failed", description: "PDF sharing restricted." });
                 }
             } catch (err: any) {
                 if (err.name !== 'AbortError') toast({ variant: "destructive", title: "Share failed", description: "Could not open share menu." });
@@ -276,8 +418,8 @@ export default function FarmerSummaryPage() {
     if (!isDataLoaded) return <div className="container py-10 text-center animate-pulse text-slate-300 font-black tracking-widest uppercase">Loading statement...</div>;
     if (!farmer) return <div className="p-10 text-center text-slate-900 font-black">{safeT('noFarmers')}</div>;
 
-    const cowAvgRate = totals.cowQuantity > 0 ? (totals.cowTotalAmount / totals.cowQuantity) : 0;
-    const buffaloAvgRate = totals.buffaloQuantity > 0 ? (totals.buffaloTotalAmount / totals.buffaloQuantity) : 0;
+    const cowAvgRate = Number(effectiveRate?.cowRate ?? (totals.cowQuantity > 0 ? (totals.cowTotalAmount / totals.cowQuantity) : 0) || 0);
+    const buffaloAvgRate = Number(effectiveRate?.buffaloRate ?? (totals.buffaloQuantity > 0 ? (totals.buffaloTotalAmount / totals.buffaloQuantity) : 0) || 0);
 
     return (
         <div className="container py-4 max-w-3xl page-transition">
@@ -285,79 +427,118 @@ export default function FarmerSummaryPage() {
                 <ChevronLeft className="w-3 h-3"/> {safeT('backToFarmerSummaryList')}
             </Link>
 
-            <div className="flex justify-between items-end mb-4 px-1 gap-4">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end mb-4 px-1 gap-4">
                 <div>
                     <h1 className="text-2xl font-black text-slate-900 tracking-tight leading-none">{farmer.name}</h1>
                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-1">{safeT('purchaseSummary')}</p>
                 </div>
                 
-                <div className="flex flex-col gap-1.5 min-w-[140px]">
-                    <div className="grid grid-cols-2 gap-1">
-                        <Select value={getMonth(selectedDate).toString()} onValueChange={(m) => setSelectedDate(setMonth(selectedDate, parseInt(m)))}>
-                            <SelectTrigger className="h-8 bg-slate-50 border-slate-200 text-[10px] font-black"><SelectValue /></SelectTrigger>
-                            <SelectContent>{months.map(m => <SelectItem key={m.value} value={m.value.toString()} className="text-[10px] font-black">{m.name}</SelectItem>)}</SelectContent>
-                        </Select>
-                        <Select value={getYear(selectedDate).toString()} onValueChange={(y) => setSelectedDate(setYear(selectedDate, parseInt(y)))}>
-                            <SelectTrigger className="h-8 bg-slate-50 border-slate-200 text-[10px] font-black"><SelectValue /></SelectTrigger>
-                            <SelectContent>{years.map(y => <SelectItem key={y} value={y.toString()} className="text-[10px] font-black">{y}</SelectItem>)}</SelectContent>
-                        </Select>
+                <div className="flex flex-col gap-2 w-full sm:w-auto">
+                    <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-xl">
+                        <Button 
+                            variant={billMode === 'a4' ? 'secondary' : 'ghost'} 
+                            size="sm" 
+                            onClick={() => setBillMode('a4')}
+                            className="h-8 rounded-lg text-[10px] font-black uppercase flex-1 sm:flex-none"
+                        >
+                            <FileText className="mr-1.5 h-3 w-3" />
+                            {safeT('professionalMode')}
+                        </Button>
+                        <Button 
+                            variant={billMode === 'thermal' ? 'secondary' : 'ghost'} 
+                            size="sm" 
+                            onClick={() => setBillMode('thermal')}
+                            className="h-8 rounded-lg text-[10px] font-black uppercase flex-1 sm:flex-none"
+                        >
+                            <Smartphone className="mr-1.5 h-3 w-3" />
+                            {safeT('thermalMode')}
+                        </Button>
                     </div>
-                    <div className="grid grid-cols-3 gap-1">
-                        <Button onClick={() => generatePdf('view')} variant="outline" className="h-8 px-0 border-slate-200"><Eye className="h-3.5 w-3.5 text-slate-400" /></Button>
-                        <Button onClick={() => generatePdf('share')} variant="outline" className="h-8 px-0 border-slate-200"><Share2 className="h-3.5 w-3.5 text-slate-400" /></Button>
-                        <Button onClick={() => generatePdf('download')} className="h-8 px-0 bg-secondary text-white"><Download className="h-3.5 w-3.5" /></Button>
+
+                    <div className="flex flex-wrap gap-1.5 min-w-[200px]">
+                        <div className="grid grid-cols-2 gap-1 flex-1">
+                            <Select value={getMonth(selectedDate).toString()} onValueChange={(m) => setSelectedDate(setMonth(selectedDate, parseInt(m)))}>
+                                <SelectTrigger className="h-8 bg-slate-50 border-slate-200 text-[10px] font-black"><SelectValue /></SelectTrigger>
+                                <SelectContent>{months.map(m => <SelectItem key={m.value} value={m.value.toString()} className="text-[10px] font-black">{m.name}</SelectItem>)}</SelectContent>
+                            </Select>
+                            <Select value={getYear(selectedDate).toString()} onValueChange={(y) => setSelectedDate(setYear(selectedDate, parseInt(y)))}>
+                                <SelectTrigger className="h-8 bg-slate-50 border-slate-200 text-[10px] font-black"><SelectValue /></SelectTrigger>
+                                <SelectContent>{years.map(y => <SelectItem key={y} value={y.toString()} className="text-[10px] font-black">{y}</SelectItem>)}</SelectContent>
+                            </Select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1 flex-1">
+                            <Button onClick={() => generatePdf('view')} variant="outline" className="h-8 gap-1.5 border-slate-200 text-[10px] font-black uppercase flex-1">
+                                <Eye className="h-3.5 w-3.5 text-slate-400" />
+                                {safeT('viewPDF')}
+                            </Button>
+                            <Button onClick={() => generatePdf('share')} variant="outline" className="h-8 gap-1.5 border-slate-200 text-[10px] font-black uppercase flex-1">
+                                <Share2 className="h-3.5 w-3.5 text-slate-400" />
+                                {safeT('sharePDF')}
+                            </Button>
+                        </div>
                     </div>
                 </div>
             </div>
 
             <Card className="mb-6 rounded-2xl overflow-hidden border-0 shadow-xl bg-[#02182B] text-white p-4 sm:p-6 relative">
-                <div className="absolute top-0 right-0 p-4 opacity-[0.06]"><Tractor className="h-16 w-14 sm:h-28 sm:w-24" /></div>
+                <div className="absolute top-0 right-0 p-4 opacity-[0.06] pointer-events-none"><Tractor className="h-16 w-14 sm:h-28 sm:w-24" /></div>
                 
-                <div className="mb-6">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">TOTAL QUANTITY</p>
+                <div className="relative z-10 mb-6">
+                    <div className="flex justify-between items-start mb-1">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">TOTAL QUANTITY</p>
+                        <Button 
+                            onClick={() => setRateDialogOpen(true)}
+                            variant="outline" 
+                            size="sm" 
+                            className="h-8 px-2.5 rounded-lg border-white/20 bg-white/5 text-[10px] font-black uppercase text-secondary hover:bg-white/10 transition-all active:scale-95 shadow-lg relative z-20"
+                        >
+                            <TrendingUp className="mr-1.5 h-3 w-3" />
+                            {t('changeRate')}
+                        </Button>
+                    </div>
                     <div className="space-y-1">
                         {totals.cowQuantity > 0 && (
                             <h2 className="text-xl sm:text-2xl md:text-3xl font-black tracking-tight text-white uppercase">
-                                {totals.cowQuantity.toFixed(2)}L COW @ {cowAvgRate.toFixed(0)}
+                                {Number(totals.cowQuantity).toFixed(2)}L COW @ {cowAvgRate.toFixed(0)}
                             </h2>
                         )}
                         {totals.buffaloQuantity > 0 && (
                             <h2 className="text-xl sm:text-2xl md:text-3xl font-black tracking-tight text-white uppercase">
-                                {totals.buffaloQuantity.toFixed(2)}L BUFFALO @ {buffaloAvgRate.toFixed(0)}
+                                {Number(totals.buffaloQuantity).toFixed(2)}L BUFFALO @ {buffaloAvgRate.toFixed(0)}
                             </h2>
                         )}
                     </div>
                 </div>
 
-                {monthlyPaymentsList.length > 0 && (
-                    <div className="mb-8">
+                {monthlyTimeline.filter(i => i.type === 'payment').length > 0 && (
+                    <div className="relative z-10 mb-8">
                         <p className="text-[11px] font-black text-accent uppercase tracking-widest mb-2">PAYMENTS -</p>
                         <div className="space-y-1">
-                            {monthlyPaymentsList.map(p => (
-                                <p key={p.id} className="text-xs font-black text-destructive uppercase">
-                                    {format(new Date(p.date), 'd MMM').toUpperCase()} - RS {p.amount.toFixed(0)} {p.note ? `(${p.note.toUpperCase()})` : ''}
+                            {monthlyTimeline.filter(i => i.type === 'payment').map((p: any) => (
+                                <p key={p.data.id} className="text-xs font-black text-destructive uppercase">
+                                    {format(new Date(p.date), 'd MMM').toUpperCase()} - RS {Number(p.data.amount).toFixed(0)} {p.data.note ? `(${p.data.note.toUpperCase()})` : ''}
                                 </p>
                             ))}
                         </div>
                     </div>
                 )}
 
-                <div className="h-px bg-white/10 w-full mb-6" />
+                <div className="relative z-10 h-px bg-white/10 w-full mb-6" />
 
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6 sm:gap-0">
+                <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6 sm:gap-0">
                     <div className="flex gap-4 sm:gap-8">
                         <div>
                             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{safeT('totalAmount')}</p>
-                            <p className="text-xl sm:text-2xl font-black">₹{totals.milkTotalAmount.toFixed(0)}</p>
+                            <p className="text-xl sm:text-2xl font-black">₹{Number(totals.milkTotalAmount).toFixed(0)}</p>
                         </div>
                         <div className="border-l border-white/10 pl-4 sm:pl-8">
                             <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{safeT('totalPayments')}</p>
-                            <p className="text-xl sm:text-2xl font-black text-accent">₹{totals.paymentTotalAmount.toFixed(0)}</p>
+                            <p className="text-xl sm:text-2xl font-black text-accent">₹{Number(totals.paymentTotalAmount).toFixed(0)}</p>
                         </div>
                     </div>
                     
                     <div className="text-left sm:text-right w-full sm:w-auto">
-                        <h2 className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tighter leading-none">₹{totals.finalPayableAmount.toFixed(2)}</h2>
+                        <h2 className="text-4xl sm:text-5xl md:text-6xl font-black tracking-tighter leading-none">₹{Number(totals.finalPayableAmount).toFixed(2)}</h2>
                         <p className="text-white/60 font-black text-[10px] uppercase tracking-widest mt-1">{safeT('finalPayableAmount')}</p>
                     </div>
                 </div>
@@ -396,19 +577,19 @@ export default function FarmerSummaryPage() {
                                         <div>
                                             <p className="font-black text-slate-900 text-[11px]">{format(day, 'dd MMM')}</p>
                                             <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">
-                                                {milkEntry ? `₹${((milkEntry.cowQuantity * milkEntry.cowRate) + (milkEntry.buffaloQuantity * milkEntry.buffaloRate)).toFixed(0)}` : " "}
+                                                {milkEntry ? `₹${((Number(milkEntry.cowQuantity) * Number(effectiveRate?.cowRate ?? milkEntry.cowRate)) + (Number(milkEntry.buffaloQuantity) * Number(effectiveRate?.buffaloRate ?? milkEntry.buffaloRate))).toFixed(0)}` : " "}
                                             </p>
                                         </div>
                                     </div>
                                     <p className="font-black text-slate-900 text-sm text-right">
                                         {!milkEntry ? (
                                             " "
-                                        ) : (milkEntry.cowQuantity + milkEntry.buffaloQuantity === 0) ? (
+                                        ) : (Number(milkEntry.cowQuantity) + Number(milkEntry.buffaloQuantity) === 0) ? (
                                             "-"
                                         ) : (
                                             <>
-                                                {farmer.milkTypes.includes('cow') && (milkEntry.cowQuantity > 0) && `${milkEntry.cowQuantity}L `}
-                                                {farmer.milkTypes.includes('buffalo') && (milkEntry.buffaloQuantity > 0) && `${milkEntry.buffaloQuantity}L`}
+                                                {farmer.milkTypes.includes('cow') && (Number(milkEntry.cowQuantity) > 0) && `${milkEntry.cowQuantity}L `}
+                                                {farmer.milkTypes.includes('buffalo') && (Number(milkEntry.buffaloQuantity) > 0) && `${milkEntry.buffaloQuantity}L`}
                                             </>
                                         )}
                                     </p>
@@ -424,7 +605,7 @@ export default function FarmerSummaryPage() {
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-3">
-                                            <p className="font-black text-destructive text-sm">- ₹{p.amount.toFixed(0)}</p>
+                                            <p className="font-black text-destructive text-sm">- ₹{Number(p.amount).toFixed(0)}</p>
                                             <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-200 hover:text-destructive hover:bg-destructive/10" onClick={() => deleteFarmerPayment(p.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                                         </div>
                                     </div>
@@ -442,6 +623,12 @@ export default function FarmerSummaryPage() {
                 type="farmer" 
                 id={id} 
                 selectedMonth={selectedDate} 
+            />
+            <RateChangeDialog
+                open={rateDialogOpen}
+                onOpenChange={setRateDialogOpen}
+                entityId={id}
+                type="farmer"
             />
         </div>
     );
